@@ -1,0 +1,153 @@
+'#### analysis_rheobase.s2s
+'#### Marin Manuel - June 2010
+'#
+'# this script uses a file with single spikes triggered by small pulses of different amplitude and tries to estimate the rheobase
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+const MAXARRAYELEMENTS% := 100;
+const WINDOWFORCURRENTBASELINE := 10e-3; 's
+const CURRENTINTTOLERANCE := 0.05; 'nA
+const CHANFITMAXITER := 10000;
+
+var startTime, endTime;
+var viewHdl%;
+var pulseStart,pulseEnd;
+var spikeChan%;
+var ok%;
+var gateDir;
+var pulseAmpl;
+var spikeTime;
+var spikePresent%;
+var dataHdl%, resultHdl%;
+var currentPulseId%, i%;
+var rheobase;
+var dummy;
+var pulseChan%;
+
+var totalNbOfInt%;
+var pulseIntArray[MAXARRAYELEMENTS%];
+var pulseCountArray%[MAXARRAYELEMENTS%];
+var spikeCountArray%[MAXARRAYELEMENTS%];
+var probSpikeArray[MAXARRAYELEMENTS%];
+
+dataHdl% := view();
+if ViewKind(dataHdl%) <> 0 then
+    Message("ERROR: script must be run on a time view");
+    halt
+endif
+FrontView(dataHdl%);
+
+'default values
+comOutChan% := 803;
+startTime := XLow();
+endTime := XHigh();
+
+DlgCreate("Parameters");
+DlgText("INFO: to use this script you must generate an", 0,1);
+DlgText("*event channel* in which each event corresponds", 0,2);
+DlgText("to a spike", 0,3);
+DlgChan(1, "Injected Current Channel", 0x1+0x10+0x200, 0,5);
+DlgChan(2, "Spike Event Channel", 0x2+0x8+0x20, 0,6);
+DlgChan(3, "ComOut Channel", 0x2+0x4+0x8+0x20, 0,7);
+DlgXValue(4, "Start analysis at", 0,8);
+DlgXValue(5, "  End analysis at", 0,9);
+ok% := DlgShow(ImChan%, spikeChan%, comOutChan%, startTime, endTime);
+if ok% then
+    if ChanKind(comOutChan%)<>4 then
+        pulseChan% := MemChan(4, 0);
+        MemImport(pulseChan%, comOutChan%, startTime, endTime);
+        comOutChan% := pulseChan%;
+    endif
+    
+    pulseEnd := startTime;
+    pulseStart := NextTime(comOutChan%, pulseEnd, gateDir);
+    while pulseStart>=0 and pulseStart<endTime do
+        if gateDir=0 then 'we have a begining of a pulse
+            pulseEnd := NextTime(comOutChan%, pulseStart);
+            'get the pulse amplitude
+            pulseAmpl := ChanMeasure(ImChan%, 2, pulseStart,pulseEnd) - ChanMeasure(ImChan%, 2, pulseStart-WINDOWFORCURRENTBASELINE, pulseStart);
+            'check if pulse elicited a spike
+            spikeTime := NextTime(spikeChan%, pulseStart);
+            if spikeTime>0 and spikeTime<=pulseEnd then
+                spikePresent%:=1;
+            else
+                spikePresent%:=0;
+            endif
+            
+            'check if this pulse amplitude already exists in the array
+            i% := ArrHasFloatFuzzy%(pulseIntArray[], pulseAmpl, CURRENTINTTOLERANCE);
+            if i%>=0 then 'yes, it does already exists
+                currentPulseId% := i%;
+            else 'no it does not already exists
+                'add it to the array
+                pulseIntArray[totalNbOfInt%] := pulseAmpl;
+                currentPulseId% := totalNbOfInt%;
+                totalNbOfInt% += 1;
+            endif
+            
+            'count 1 pulse
+            pulseCountArray%[currentPulseId%] += 1;
+            'and count spike (or not)
+            spikeCountArray%[currentPulseId%] += spikePresent%;
+        else
+            pulseEnd := pulseStart;
+        endif
+        'next pulse
+        pulseStart := NextTime(comOutChan%, pulseEnd, gateDir);
+    wend
+    
+    'finished going through all the pulses, and populating the arrays.
+    'calculate the probability
+    if totalNbOfInt%>0 then
+        ArrConst(probSpikeArray[],spikeCountArray%[]);
+        ArrDiv(probSpikeArray[:totalNbOfInt%],pulseCountArray%[:totalNbOfInt%]);
+        
+        'create a XY view to plot the result
+        resultHdl% := FileNew(12);
+        view(resultHdl%);
+        XYAddData(1, pulseIntArray[:totalNbOfInt%],probSpikeArray[:totalNbOfInt%]);
+        ChanUnits$(0,"");
+        ChanTitle$(0,"Spike probability");
+        XTitle$(view(dataHdl%).ChanTitle$(ImChan%));
+        XUnits$(view(dataHdl%).ChanUnits$(ImChan%));
+        
+        'prepare Sigmoid fit
+        ChanFit(1,5,1);
+        ChanFitCoef(1,0,0.0); 'min prob is 0.0
+        ChanFitCoef(1,1,1.0); 'max prob is 1.0
+        var coefHold%[2];
+        ArrConst(coefHold%[],1);
+        ChanFitCoef(1,coefHold%[]); 'holds the 2 first coef at this value
+        'performs the fit
+        ok% := ChanFit(1,1,XLow(),XHigh(), 0.0, dummy, CHANFITMAXITER);
+        if ok%=0 then
+            'fit succeeded
+            'display fit
+            ChanFitShow(1,1+2,XLow(), XHigh());
+            rheobase := ChanFitCoef(1,2);
+            
+            'diplay the rheobase in the middle of the screen
+            var padding;
+            padding := XHigh()-rheobase;
+            XRange(rheobase-padding, rheobase+padding);
+            CursorNew(rheobase);
+            PrintLog("--------------------------------------------------------------------------------\n");
+            PrintLog("file: %s - %s %s\n", view(dataHdl%).FileName$(3)+view(dataHdl%).FileName$(4)+view(dataHdl%).FileName$(5), Date$(), Time$());
+            PrintLog("region : [%.2f - %.2f (s)]\n",startTime, endTime);
+            PrintLog("Rheobase: %.2f (%s)\n",rheobase, view(dataHdl%).ChanUnits$(ImChan%));
+        endif
+        
+        
+        view(dataHdl%).Window(0,0,50,100);
+        view(resultHdl%).WindowVisible(1);
+        view(resultHdl%).Window(50,0,100,100);
+        view(dataHdl%);
+    endif    
+endif

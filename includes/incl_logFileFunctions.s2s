@@ -1,0 +1,117 @@
+'#### incl_logFileFunctions.s2s
+'#### Marin Manuel
+'#
+'# this file provides functions to format informations in a log file
+
+#include "incl_locals.s2s"
+#include "incl_constants.s2s"
+#include "incl_stringFunctions.s2s"
+
+proc expLogPrint(text$)
+    'this function prints a line of text in the exp. log file.
+    'the text can contain | to determine tje alignment of the text, as such:
+    '"left-aligned text|centered text|right-aligned text"
+    '"||right-aligned text"
+    var logFileName$;
+    var oldHdl%,logFileHdl%;
+    var nbPad%;
+    var format$;
+    var i%;
+    var splitText$[3];
+    var eol%,line$;
+            
+    logFileName$ := recordPath$+expLogFileName$;
+    oldHdl% := view();
+    logFileHdl% := FileOpen(logFileName$,8,3);
+    if logFileHdl% < 0 then
+        Message("Error! Cannot open exp log file for writing!\nAborting");
+        halt;
+    endif
+    view(logFileHdl%);
+    
+    if Right$(text$,1)<>"\n" then
+        text$ += "\n";
+    endif;
+    eol% := InStr(text$,"\n");
+    
+    while eol% > 0 do
+        line$ := Left$(text$,eol%-1);
+        expLogSplitText(line$,splitText$[]);
+        if Len(splitText$[0])+Len(splitText$[1])+Len(splitText$[2]) >= expLogFileWidth% then
+            'if the parts to print are longer than the width of the log file
+            'don't bother trying to align them
+            Print(splitText$[0]+" "+splitText$[1]+" "+splitText$[2]+"\n");
+        else
+            nbPad% := 0;
+            Print(splitText$[0]);
+            if Len(splitText$[1])>0 then
+                nbPad% := (expLogFileWidth%/2)-Len(splitText$[0])-(Len(splitText$[1])/2);
+                if nbPad% <= 0 then
+                    nbPad% := 1;
+                endif;
+                Print(pad$(" ",nbPad%));
+                Print(splitText$[1]);
+            endif;
+            if Len(splitText$[2])>0 then
+                nbPad% := expLogFileWidth%-Len(splitText$[0])-Len(splitText$[1])-Len(splitText$[2])-nbPad%;
+                if nbPad% <= 0 then
+                    nbPad% := 1;
+                endif;
+                Print(pad$(" ",nbPad%));
+                Print(splitText$[2]);
+            endif;
+            Print("\n");
+        endif;
+        text$ := Mid$(text$,eol%+1);
+        eol% := InStr(text$,"\n");
+    wend;
+    FileClose();
+    view(oldHdl%);
+end;
+
+proc expLogPrintUnderline(text$)
+    var underline$;
+    var i%;
+    for i% := 1 to Len(text$) do
+        if Mid$(text$,i%,1)="|" then
+            underline$ += "|";
+        else
+            underline$ += "-";
+        endif;
+    next;
+    expLogPrint(text$);
+    expLogPrint(underline$);
+end;
+
+proc expLogPrintLine()
+    expLogPrintLineChar("-");
+end;
+
+proc expLogPrintLineChar(char$)
+    expLogPrint(pad$(char$,expLogFileWidth%));
+end;
+
+proc expLogPrintTitle(text$)
+    var temp$;
+    var splitText$[3];
+    expLogSplitText(text$,splitText$[]);
+    temp$ := "# "+splitText$[0]+"|"+splitText$[1]+"|"+splitText$[2]+" #";
+    expLogPrintLineChar("#");
+    expLogPrint(temp$);
+    expLogPrintLineChar("#");
+end;
+
+proc expLogSplitText(text$,&splitText$[])
+    'this function splits a string containing | in 3
+    var ind%;
+    var temp$;
+    ind% := InStr(text$,"|",1);
+    if ind%>0 and Len(splitText$[])>1 then
+        temp$ := Left$(text$,ind%-1);
+        splitText$[0] := trim$(temp$);
+        text$ := Right$(text$,Len(text$)-ind%);
+        expLogSplitText(text$,splitText$[1:]);
+    else
+        splitText$[0] := text$;
+    endif;
+end;

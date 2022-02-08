@@ -1,0 +1,42 @@
+'copy file as incl_locals.s2s and personalize the variables
+
+'this file contains location specific variables
+'e.g. paths for saving files, for saving resuts etc...
+
+var recordPathRoot$ := "C:\\";
+var recordPath$;
+Profile("experiments","recordPath",recordPath$,recordPath$);
+var scriptsPath$ := "C:\\scripts\\";
+var tmpPath$;
+tmpPath$ := System$("TMP");
+if Len(tmpPath$)=0 then
+    tmpPath$ := "C:\\WINNT\\Temp\\";
+else
+    tmpPath$ += "\\";
+endif;
+
+'***** MySQL *****
+const MySQLloginpath$ := "configfile";
+const MySQLDB$ := "dbname";
+
+'***** gains etc... *****
+const H := 0.1;
+const nA2V := 10*H; 'nA/V - convert command dignal in nA in V
+const mV2V := 0.05; 'mv/V - convert command signal in mV in V
+const ioRange := 10; 'V
+
+'***** serial communication to the CyberAmp for force transducer *****
+const forceDeviceId% := 0;
+const forceOffsetAmp% := 1;
+const forceGainAmp% := 2;
+const forceSerialPort% := 3;
+const forceSerialBaud% :=  9600;
+const forceSerialBits% := 8;
+const forceSerialParity% := 0;
+const forceSerialStop% := 1;
+const forceSerialHsk% := 0;
+
+'***** screens *****
+const mainScreen% := 0; 'index number of the main screen (the one where the dialog will be shown).
+'set to 0 if only one screen
+const secScreen% := 0;

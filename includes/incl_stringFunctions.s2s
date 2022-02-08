@@ -1,0 +1,67 @@
+'#### incl_stringFunctions.s2s
+'#### Marin Manuel
+'#
+'# this file provides utility functions to manipulate strings
+
+func trimL$(text$)
+    'this function removes white spaces to the left of text$
+    while Left$(text$,1)=" " or Left$(text$,1)="\t" do
+        text$ := Right$(text$,Len(text$)-1);
+    wend;
+    return text$;
+end;
+
+func trimR$(text$)
+    'this function removes white spaces to the right of text$
+    while Right$(text$,1)=" " or Right$(text$,1)="\t" do
+        text$ := Left$(text$,Len(text$)-1);
+    wend;
+    return text$;
+end;
+
+func trim$(&text$)
+    'this function removes white spaces to the left and to the right
+    'of text$
+    return trimL$(trimR$(text$));
+end;
+
+func pad$(char$,nb%)
+    var temp$;
+    var i%;
+    for i% := 1 to nb% do
+        temp$+=char$;
+    next;
+    return temp$;
+end;
+
+proc replaceStr(&text$,what$,with$)
+    'this function searches what$ in text$ and replace every occurence by with$
+    var nbOcc%;
+    var ind% := 1;
+    ind% := InStr(text$,what$,ind%);
+    var tempL$,tempR$;
+    while ind% > 0 do
+        tempL$ := Left$(text$,ind%-1);
+        tempR$ := Right$(text$,Len(text$)-ind%-Len(what$)+1);
+        text$ := tempL$+with$+tempR$;
+        ind% := InStr(text$,what$,ind%+len(with$));
+    wend;
+end;
+
+func magicQuote$(text$)
+    var result$;
+    result$ := text$;
+    replaceStr(result$, "'",  "\\'");
+    replaceStr(result$, "\"",  "\\\"");
+    replaceStr(result$, "\n", "\\n");
+    return result$;
+end;
+
+func reverseStr$(text$)
+    var result$;
+    var i%;
+    for i% := Len(text$) to 1 step -1 do
+        result$ += Mid$(text$,i%,1);
+    next
+    return result$;
+end;

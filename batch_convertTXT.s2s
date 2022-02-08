@@ -1,0 +1,11 @@
+'batch_convertTXT
+'converts all open files to TXT
+
+var hdlList%[1000],i%;
+var currPath$;
+ViewList(hdlList%[],1+16+4096+32768+65536);
+for i%:=1 to hdlList%[0] do
+    view(hdlList%[i%]);
+    currPath$ := FileName$(-3);
+    FileSaveAs(currPath$+".txt", 1);
+next

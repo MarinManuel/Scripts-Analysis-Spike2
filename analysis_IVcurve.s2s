@@ -1,0 +1,177 @@
+'#### analysis_IVcurve.sgs
+'#### Marin Manuel
+'# this script performs an off-line analysis on an single VRamp data
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+#include "includes/incl_IVcurve.s2s"
+
+const LogFormat$:=" %-61s  |%s\n";
+var dataHdl%;
+var currentFolder$;
+var dataFileName$;
+var name$,expNum%,cellNum%,fileNum%;
+
+VmChan%:=2;
+ImChan%:=3;
+var rampStart:=2,rampStop;
+var ok%;
+
+var tempLog$,Comment$;
+
+dataHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+FrontView(dataHdl%);
+
+if ViewKind(dataHdl%)=0 or ViewKind(dataHdl%)=4 then 'works on data file or memory views
+    rampStop:=MaxTime();
+    currentFolder$:=FileName$(1)+FileName$(2);
+    dataFileName$:=FileName$(3)+FileName$(4);
+    
+    DlgCreate("IV curve parameters");
+    DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2,"Current Channel", 0x1+0x10+0x200);
+    DlgXValue(3,"Start analysis at");
+    DlgXValue(4,"  End analysis at");
+    ok%:=DlgShow(VmChan%,ImChan%,rampStart,rampStop);
+    if ok% then
+        var rawIVHdl%,leakSubIVHdl%;
+        var leakYint,leakSlope;
+        var PICOnset,onsetTime;
+        var leakStart,leakStop;
+        leakStart:=view(dataHdl%).ChanValue(VmChan%,rampStart);
+        leakStop:=leakStart+IVCurveLeakSubRange;
+        'do IV curve
+        rawIVHdl%:=doIVCurve%(VmChan%,ImChan%,rampStart,rampStop);
+        if rawIVHdl%<0 then
+            Message("Error while creating the IV curve");
+            halt
+        endif
+        view(dataHdl%);
+        PICOnset:=estimateIVCurvePICOnset(rawIVHdl%,onsetTime);
+        getIVCurveLeak(rawIVHdl%,leakStart,leakStop,leakYint,leakSlope);
+        if rawIVHdl%>0 then
+            placeResults(dataHdl%,rawIVHdl%,1,1);
+            acceptResults(dataHdl%,rawIVHdl%,0,PICOnset,0,0);
+        endif
+    endif
+endif
+IVCurveCleanup(dataHdl%);
+
+proc acceptResults(dataHdl%,rawIVHdl%,leakSubIVHdl%,defaultPICOnset,defaultPICMax,defaultPICAmpl);
+    var accept%;
+    var PICOnset,PICMax,PICAmpl;
+    var oldHdl%;
+    var dummy1,dummy2,dummy3,dummy4;
+    
+    
+    accept%:=Interact("Accept Results?",1+2+4,0,"Reject","Accept","Do leak Sub");
+    docase
+    case accept%=2 then
+        'Accept
+        if not saveIVCurves%(rawIVHdl%,leakSubIVHdl%,dataFileName$,defaultPICOnset,defaultPICMax,defaultPICAmpl) then
+            acceptResults(dataHdl%,rawIVHdl%,leakSubIVHdl%,defaultPICOnset,defaultPICMax,defaultPICAmpl);
+        endif
+    case accept%=1 then
+        'Reject
+        if rawIVHdl%>0 then
+            view(rawIVHdl%);FileClose(0,-1);
+            rawIVHdl%:=0;
+        endif
+        if leakSubIVHdl%>0 then
+            view(leakSubIVHdl%);FileClose(0,-1);
+            leakSubIVHdl%:=0;
+        endif
+        placeResults(dataHdl%,0,0,0);
+        view(dataHdl%);
+    case accept%=3 then
+        'do leak sub
+        if leakSubIVHdl%>0 then
+            'we already have a leak sub IV curve=> delete and start over
+            view(leakSubIVHdl%);FileClose(0,-1);
+            view(dataHdl%).ChanDelete(IVCurveAscLeakSubImChan%);
+            view(dataHdl%).ChanDelete(IVCurveDescLeakSubImChan%);
+            IVCurveAscLeakSubImChan%:=0;
+            IVCurveDescLeakSubImChan%:=0;
+        endif
+        view(dataHdl%).getIVCurvePoints(rawIVHdl%,0,PICOnset,dummy1,dummy2);
+        view(dataHdl%).getIVCurveLeak(rawIVHdl%,dummy1,dummy2,leakYint,leakSlope);
+        'do the leak substracted curve
+        leakSubIVHdl%:=view(dataHdl%).doLeakSubIVCurve%(VmChan%,leakYint,leakSlope);
+        if leakSubIVHdl%<0 then
+            Message("Error while creating the leak substracted IV curve");
+            return;
+        endif
+
+        'get estimation of PIC Onset/Max/Ampl
+        view(dataHdl%).estimateIVCurvePICAmpl(leakSubIVHdl%,PICOnset,defaultPICMax,defaultPICAmpl);
+        
+        placeResults(dataHdl%,rawIVHdl%,1,2);
+        placeResults(dataHdl%,leakSubIVHdl%,2,2);
+        acceptResults(dataHdl%,rawIVHdl%,leakSubIVHdl%,defaultPICOnset,defaultPICMax,defaultPICAmpl);
+    endcase
+end
+
+func saveIVCurves%(rawIVHdl%,leakSubIVHdl%,dataFileName$,defaultPICOnset,defaultPICMax,defaultPICAmpl)
+    var result%:=1;
+    var dummy;
+    var oldHdl%;
+    var leakStart,leakStop,leakSlope;
+    var PICOnset,PICMax,PICAmpl;
+    
+    oldHdl%:=view(rawIVHdl%);
+    
+    'get actual value of PIConset (via cursor)
+    if rawIVHdl%>0 then
+        getIVCurvePoints(rawIVHdl%,leakSubIVHdl%,PICOnset,PICMax,PICAmpl);
+        if leakSubIVHdl%>0 then
+            getIVCurveLeak(rawIVHdl%,leakStart,leakStop,dummy,leakSlope);
+        endif
+    endif
+    
+    var ok%:=1;
+    var acceptDefault%;
+    if (PICOnset=defaultPICOnset and rawIVHdl%>0) or (PICMax=defaultPICMax and leakSubIVHdl%>0) or (PICAmpl=defaultPICAmpl and leakSubIVHdl%>0) then
+        DlgCreate("Query");
+        DlgLabel(1,"Accept estimated values?");
+        DlgButton(0,"Cancel");
+        DlgButton(1,"No");
+        DlgButton(2,"Yes");
+        ok%:=DlgShow(dummy);
+        acceptDefault%:=ok%=2?1:0;
+    endif    
+    if ok%>0 then
+        if rawIVHdl%>0 then
+            view(rawIVHdl%).FileSaveAs(currentFolder$+dataFileName$+"_IVCurve.sxy",-1,0,"Choose name");
+        endif
+        if leakSubIVHdl%>0 then
+            view(leakSubIVHdl%).FileSaveAs(currentFolder$+dataFileName$+"_IVCurve_leakSub.sxy",-1,0,"Choose name");
+        endif
+        
+        PrintLog("%s %s - %s\n",Date$(2,2,3,3,"/"),Time$(1,1+2,3,":"),dataFileName$);
+        PrintLog("---------- -----   --------------------------------------------------------------\n"); 
+        if leakSubIVHdl%>0 then
+            PrintLog(LogFormat$,Print$("Gpass=%+.1e from=%+.1f to=%+.1f",leakSlope,leakStart,leakStop),"");
+        endif
+        
+        if (PICOnset<>defaultPICOnset or acceptDefault%) and rawIVHdl%>0 then
+            tempLog$+=Print$(" PICOnset=%+.1f",PICOnset);
+        endif
+        if (PICMax<>defaultPICMax or acceptDefault%) and leakSubIVHdl%>0 then
+            tempLog$+=Print$(" PICMaxV=%+.1f",PICMax);
+        endif
+        if (PICAmpl<>defaultPICAmpl or acceptDefault%) and leakSubIVHdl%>0 then
+            tempLog$+=Print$(" PICAmpl=%+.1f",PICAmpl);
+        endif
+        if Len(tempLog$)>0 then
+            PrintLog(LogFormat$,tempLog$,"");
+        endif
+    else
+        result%:=0;
+    endif
+    view(oldHdl%);
+    return result%;
+end

@@ -1,0 +1,179 @@
+'#### incl_mathFunctions.s2s
+'#### Marin Manuel
+'#
+'# various mathematical functions to be used in other scripts
+
+#include "incl_constants.s2s"
+
+func DivCx%(real1, im1, real2, im2, &realRet, &imRet);
+    'divide two numbers
+    '
+    ' a+ib     (ac+bd) + i (bc - ad)
+    '------ = -----------------------
+    ' c+id           (c^2+d^2)
+    var denom;
+    denom := pow(real2,2)+pow(im2,2);
+    realRet := ((real1*real2)+(im1*im2))/denom;
+    imRet := ((im1*real2)-(real1*im2))/denom;
+    return 1;
+end    
+    
+    
+func DivCxArr%(nb1[][],nb2[][], ret[][]);
+    'divide the two complex vectors
+    '
+    ' a+ib     (ac+bd) + i (bc - ad)
+    '------ = -----------------------
+    ' c+id           (c^2+d^2)
+    var nbPoints%;
+    if Len(nb1[0][])<>2 or Len(nb2[0][])<>2 or Len(ret[0][])<>2 then
+        return -1;
+    endif
+    if Len(nb1[][0])<>Len(nb2[][0]) or Len(nb1[][0])<>Len(ret[][0]) then
+        return -1;
+    endif
+    nbPoints% := Len(nb1[][0]);
+    var temp1[nbPoints%], temp2[nbPoints%], denom[nbPoints%];
+    
+    'denominator
+    ArrConst(denom, nb2[][0]);
+    Pow(denom,2);
+    ArrConst(temp1, nb2[][1]);
+    Pow(temp1,2);
+    ArrAdd(denom,temp1);
+    
+    'Real part
+    ArrConst(temp1,nb1[][0]);
+    ArrMul(temp1,nb2[][0]);
+    ArrConst(temp2,nb1[][1]);
+    ArrMul(temp2,nb2[][1]);
+    ArrAdd(temp1,temp2);
+    ArrConst(ret[][0],temp1);
+    ArrDiv(ret[][0],denom);
+    
+    'Imaginary part
+    ArrConst(temp1,nb1[][1]);
+    ArrMul(temp1,nb2[][0]);
+    ArrConst(temp2,nb1[][0]);
+    ArrMul(temp2,nb2[][1]);
+    ArrSub(temp1,temp2);
+    ArrConst(ret[][1],temp1);
+    ArrDiv(ret[][1],denom);
+    
+    return 1;
+end
+
+func absCx(real, im);
+    return sqrt(pow(real,2)+pow(im,2));
+end
+
+func absCxArr%(cx[][], magn[]);
+    if Len(cx[][0])<>Len(magn[]) or Len(cx[0][])<>2 then
+        return -1;
+    endif
+    
+    var temp[Len(magn[])];
+    
+    ArrConst(magn[],cx[][0]);
+    pow(magn[],2);
+    ArrConst(temp[],cx[][1]);
+    pow(temp[],2);
+    ArrAdd(magn[],temp[]);
+    sqrt(magn[]);
+    
+    return 1;
+end
+
+proc ArrSmooth(arr[], nSmooth%)
+    'this function smoothes an array by replacing each point by the average
+    'taken 'nSmooth%' point around it.
+    var nbPoints%;
+    var i%;
+    nbPoints% := Len(arr[]);
+    
+    if nSmooth%<3 then
+        nSmooth% := 3;
+    endif
+    if nSmooth% mod 2 = 0 then
+        nSmooth%+=1;
+    endif
+    
+    var temp[nbPoints%+2*(nSmooth%-1)/2];
+    var filter[nSmooth%];
+    
+    ArrConst(filter[],1.0/nSmooth%);
+    ArrConst(temp[(nSmooth%-1)/2:nbPoints%],arr[]);
+    for i% := 0 to (nSmooth%-1)/2-1 do
+        temp[i%] := arr[(nSmooth%-1)/2-1-i%];
+        temp[(nSmooth%-1)/2+nbPoints%+i%] := arr[(nbPoints%-1)-i%];
+    next
+    ArrFilt(temp[], filter[]);
+    ArrConst(arr[],temp[(nSmooth%-1)/2:nbPoints%]);
+end
+
+proc ArrFlip(arr[])
+    var nbPoints% := Len(arr[]);
+    var i%;
+    var tempVal;
+    for i% := 0 to Floor((nbPoints%-1)/2) do
+        tempVal := arr[i%];
+        arr[i%] := arr[nbPoints%-1-i%];
+        arr[nbPoints%-1-i%] := tempVal;
+    next
+end
+
+func deg2rad(degValue)
+    return degValue*pi/180;
+end
+
+func linearInterpolation(targetX,x1,y1,x2,y2)
+    'this function performs a linear interpolation between 2 points (x1,y1) and (x2,y2)
+    'and returns the value Y corresponding to the desired targetX
+    'targetX should be x1<=targetX<=x2 to produce a reasonable result.
+    var result;
+    var slope;
+    slope := (y2-y1)/(x2-x1);
+    result := y1 + slope*(targetX-x1);
+    return result
+end
+
+proc linregress(x[],y[],&m,&b,intercept%);
+    'calculate the least square linear fit of x and y.
+    'if intercept is 1 then fit the equation y = mx+b
+    'if intercept is 0 then fit the equation y = mx 
+    'in the latter case, the value returned in b is to be ignored
+    var N% := len(x[]);
+    if len(y[])<>N% then
+        Message("ERROR: x and y must have the same length");
+        halt
+    endif
+    var mx,my,Sxy,Sx2,Sxmxymy,Sxmx2;
+    var xy[N%],x2[N%],xmx[N%], ymy[N%],xmxymy[N%],xmx2[N%];
+    mx := ArrSum(x[])/N%;
+    my := ArrSum(y[])/N%;
+    ArrConst(xy[],x[]);
+    ArrMul(xy[],y[]);
+    Sxy := ArrSum(xy[]);
+    ArrConst(x2[],x[]);
+    Pow(x2[],2);
+    Sx2 := ArrSum(x2[]);
+    ArrConst(xmx[],x[]);
+    ArrSub(xmx[],mx);
+    ArrConst(ymy[],y[]);
+    ArrSub(ymy[],my);
+    ArrConst(xmxymy[],xmx[]);
+    ArrMul(xmxymy[],ymy[]);
+    ArrConst(xmx2[],xmx[]);
+    Pow(xmx2[],2);
+    Sxmxymy := ArrSum(xmxymy[]);
+    Sxmx2 := ArrSum(xmx2[]);
+    if intercept%>=1 then
+        m := Sxmxymy/Sxmx2;
+        b := my - m*mx;
+    else
+        m := Sxy/Sx2;
+        b := 0;
+    endif
+end
+
+

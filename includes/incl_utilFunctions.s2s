@@ -1,0 +1,653 @@
+'#### incl_utilFunctions.s2s
+'#### Marin Manuel
+'#
+'# this file provides various utility functions
+
+#include "incl_constants.s2s"
+#include "incl_globalVariables.s2s"
+#include "incl_locals.s2s"
+#include "seqlib.s2s" 
+
+
+proc ChanCopy(fromChan%, toChan%, startPos, endPos)
+    var tempBuffer[bufferSize%];
+    var tempPos;
+    var nbPoints%;
+    tempPos := startPos;
+    repeat
+        nbPoints% := ChanData(fromChan%,tempBuffer[],tempPos,endPos,tempPos);
+        if nbPoints%>0 then
+            ChanWriteWave(toChan%,tempBuffer[:nbPoints%],tempPos);
+            tempPos := tempPos + nbPoints%*BinSize(fromChan%);
+        endif
+    until nbPoints% <= 0;
+end
+
+'******************************************************************************
+'* Array functions                                                            *
+'******************************************************************************
+
+func ArrHasInt%(myArray%[],item%)
+    'returns the index of item% in myArray%[]
+    'or -1 if myArray%[] doesn't contain item%
+    var result%;
+    var tempArray%[Len(myArray%[])];
+    ArrConst(tempArray%[],myArray%[]);
+    ArrSub(tempArray%[],item%);
+    abs(tempArray%[]);
+    result% := min(tempArray%[]);
+    if tempArray%[result%]>0 then
+        result% := -1;
+    endif
+    return result%;
+end
+
+func ArrHasFloat%(myArray[],item)
+    'returns the index of item in myArray[]
+    'or -1 if myArray[] doesn't contain item
+    return ArrHasFloatFuzzy%(myArray[], item, 0.0);
+end
+
+func ArrHasFloatFuzzy%(myArray[],item, tolerance)
+    'returns the index of item in myArray[]
+    'or -1 if myArray[] doesn't contain item
+    var result%;
+    var tempArray[Len(myArray[])];
+    ArrConst(tempArray[],myArray[]);
+    ArrSub(tempArray[],item);
+    abs(tempArray[]);
+    result% := min(tempArray[]);
+    if tempArray[result%]>abs(tolerance) then
+        result% := -1;
+    endif
+    return result%;
+end
+
+func ArrHasStr%(myArray$[],item$)
+    'returns the index of item$ in myArray$[]
+    'or -1 if myArray$[] doesn't contain item$
+    var result%:=-1;
+    var i%:=0;
+    repeat
+        if (UCase$(item$)=UCase$(myArray$[i%])) then
+            result%:=i%;
+        else
+            i%+=1;
+        endif
+    until result%>=0 or i%>=Len(myArray$[]);
+    return result%;
+end
+
+func ArrFindBounding%(myArray[],targetValue)
+    'this function returns the index(es) of the items that bound the target value, so that:
+    'myArray[hit%] <= targetValue <= myArray[hit%+1]
+    var i%;
+    var hit% := -1;
+    var nbPoints% := Len(myArray[]);
+    'loop through the data to find the 2 points bounding targetValue
+    for i% := 0 to nbPoints%-2 do '-2 because we're going to be looking 1 ahead of i% and we don't want to overflow the array
+        if (myArray[i%] <= targetValue) and (myArray[i%+1] >= targetValue) then
+            hit% := i%;
+            break
+        endif
+    next
+    return hit%;
+end
+
+
+func ProfileWriteArr(key$, name$, arr[])
+    'saves the array arr[], under the name name$ in the key
+    'key$ of the registry
+    'return the number of elements of arr[] that were written
+    var i%,nbItems%;
+    var realKey$;
+    nbItems% := Len(arr[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),Print$("%g",arr[i%]));
+    next
+    Profile(realKey$,"size",nbItems%);
+    return nbItems%;
+end
+
+func ProfileReadArr(key$, name$, arr[])
+    'reads the content of the data named name$, located in key key$ or the registry
+    'returns the number of elements that would be returned if arr was of infinite length
+    var i%,nbItems%,nbItemsPresent%;
+    var realKey$;
+    var temp$;
+    nbItems% := Len(arr[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),Print$("%g",arr[i%]),temp$);
+        arr[i%] := Val(temp$);
+    next
+    Profile(realKey$,"size",0,nbItemsPresent%);
+    return nbItemsPresent%;
+end
+
+func ProfileWriteArr%(key$, name$, arr%[])
+    'saves the array arr[], under the name name$ in the key
+    'key$ of the registry
+    'return the number of elements of arr[] that were written
+    var i%,nbItems%;
+    var realKey$;
+    nbItems% := Len(arr%[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),arr%[i%]);
+    next
+    Profile(realKey$,"size",nbItems%);
+    return nbItems%;
+end
+
+func ProfileReadArr%(key$, name$, arr%[])
+    'reads the content of the data named name$, located in key key$ or the registry
+    'returns the number of elements that would be returned if arr was of infinite length
+    var i%,nbItems%,nbItemsPresent%;
+    var realKey$;
+    nbItems% := Len(arr%[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),arr%[i%],arr%[i%]);
+    next
+    Profile(realKey$,"size",0,nbItemsPresent%);
+    return nbItemsPresent%;
+end
+
+func ProfileWriteArr$(key$, name$, arr$[])
+    'saves the array arr[], under the name name$ in the key
+    'key$ of the registry
+    'return a textual representation of the number of elements
+    'of arr[] that were written
+    var i%,nbItems%;
+    var realKey$;
+    nbItems% := Len(arr$[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),arr$[i%]);
+    next
+    Profile(realKey$,"size",nbItems%);
+    return Str$(nbItems%);
+end
+
+func ProfileReadArr$(key$, name$, arr$[])
+    'reads the content of the data named name$, located in key key$ or the registry
+    'returns a textual representation of the number of elements that would be returned
+    'if arr was of infinite length
+    var i%,nbItems%,nbItemsPresent%;
+    var realKey$;
+    nbItems% := Len(arr$[]);
+    realKey$ := key$;
+    if Right$(realKey$,1)="\\" then
+        realKey$ += name$;
+    else
+        realKey$ += "\\"+name$;
+    endif
+    for i%:=0 to nbItems%-1 do
+        Profile(realKey$,Print$("%d",i%),arr$[i%],arr$[i%]);
+    next
+    Profile(realKey$,"size",0,nbItemsPresent%);
+    return Str$(nbItemsPresent%);
+end
+
+
+
+'******************************************************************************
+'* Windows functions                                                          *
+'******************************************************************************
+proc placeResults(dataHdl%,resultHdl%,resultId%,nbResults%)
+    var nbMonitors%;
+    nbMonitors% := System(1,0);
+    docase
+    case nbMonitors%=2 then
+        View(App()).Window(0,0,100,100,0+1000);  'Spike2 uses all desktops
+        view(dataFileHdl%).Window(0,0,100,100,mainScreen%,0); 'data window takes all the first monitor space
+        view(LogHandle()).WindowVisible(0);  'Hide the log window
+        if resultHdl%>0 then
+            'view(LogHandle()).Window(0,80,100,100,2,0);
+            view(resultHdl%);
+            Window((resultId%-1)*(100/nbResults%),0,(resultId%)*(100/nbResults%),100,secScreen%,0);
+            FrontView(resultHdl%);
+        else
+            'view(LogHandle()).Window(0,0,100,100,2,0);
+        endif
+    else
+        'view(LogHandle()).Window(0,80,100,100);
+        'FrontView(LogHandle());
+        view(LogHandle()).WindowVisible(0);  'Hide the log window
+        if nbResults%>0 then
+            FrontView(dataHdl%);
+            Window(0,0,66,100);
+            if resultHdl%>0 then
+                view(resultHdl%);
+                Window(66,(resultId%-1)*(100/nbResults%),100,(resultId%)*(100/nbResults%));
+                FrontView(resultHdl%);
+            endif
+        else
+            FrontView(dataHdl%);
+            Window(0,0,100,100);
+            'Window(0,0,100,80);
+        endif
+    endcase
+    FrontView(dataHdl%);
+end
+
+proc placeResultViews()
+    var i%;
+    for i% := 0 to nbResultFiles%-1 do
+        placeResults(dataFileHdl%,resultFiles%[i%],i%+1,nbResultFiles%);
+    next;
+end;
+
+proc hideWindows(type%)
+    'this function hides all the file of a certain type
+    var i%,nbView%;
+    var dummy%[1];
+    nbView% := ViewList(dummy%[],32768);
+    var viewsList%[nbView%];
+    if type% < 0 then
+        ViewList(viewsList%[]);
+    else
+        ViewList(viewsList%[],type%);
+    endif
+    for i% := 1 to viewsList%[0] do
+        view(viewsList%[i%]).WindowVisible(0);
+    next;
+end;
+
+proc closeAllNoDuplicates()
+    'this function closes all open views,
+    'but closes duplicates first so that they are not saved in the resource file
+    var viewsList%[1000];
+    var maxDup%, dvh%;
+    var i%, j%;
+    ViewList(viewsList%[],1+2+4+8+16+256+512+2018+4096+65536); 'get everything but the application window and exclude duplicates
+    for i% := 1 to viewsList%[0] do
+        View(viewsList%[i%]);
+        maxDup% := Dup(0);         'Get maximum numbered duplicate
+        for j% := 1 to maxDup% do  'loop round all possible duplicates
+            dvh% := Dup(2);        'get handle of this duplicate
+            if (dvh% > 0) then      'does this duplicate exist?
+                view(dvh%);FileClose();         'close window
+            endif;
+        next;
+        if ViewKind(viewsList%[i%])>=0 then 'test if the original view still exists for some reason
+            View(viewsList%[i%]); FileClose(); 'close it
+        endif
+    next
+end
+
+
+proc collapseChans(chans[])
+    'this function takes a list of channels and drops them on top of each other
+    'so that the first channel is on top, the second just underneath it, etc...
+    'it also locks the grop axis so that all the channels are at the same scale
+    var nbChans%;
+    nbChans% := Len(chans[]);
+    var chanSpc%[nbChans%+1];
+    var i%;
+    'create a channel specifier array
+    chanSpc%[0] := nbChans%;
+    ArrConst(chanSpc%[1:], chans[]);
+    
+    for i% := nbChans%-1 to 0 step -1 do
+        ChanOrder(chans[0],0,chans[i%]);
+    next
+    
+    YAxisLock(chans[0],1);
+    Optimise(chanSpc%[]);
+end
+
+proc XYOptimise(chan%)
+    'this function optimises both X and Y axes in a XY view
+    'chan% needs to be a valid channel or -1 for all channels
+    const RANGELEEWAY := 0.05; 'range will be min-max +/- 5%
+    var minX,maxX,minY,maxY,tempMinX,tempMinY,tempMaxX,tempMaxY;
+    var xData[100],yData[100];
+    var nbPoints%;
+    var chanNum% := 1;
+    if chan%=-1 then
+        while ChanKind(chanNum%) do 'ChanKind returns > 0 if channel exists
+            nbPoints% := XYCount(chanNum%);
+            if nbPoints%=0 then
+                break
+            endif
+            resize xData[nbPoints%],yData[nbPoints%];
+            XYGetData(chanNum%,xData[],yData[]);
+            if chanNum% = 1 then 'there are no min/max values yet
+                minX := xData[min(xData[])];
+                maxX := xData[max(xData[])];
+                minY := yData[min(yData[])];
+                maxY := yData[max(yData[])];
+            else
+                minX := min(minX,xData[min(xData[])]);
+                maxX := max(maxX,xData[max(xData[])]);
+                minY := min(minY,yData[min(yData[])]);
+                maxY := max(maxY,yData[max(yData[])]);
+            endif
+            chanNum%+=1;
+        wend
+    else
+        chanNum% := chan%;
+        nbPoints% := XYCount(chanNum%);
+        resize xData[nbPoints%],yData[nbPoints%];
+        XYGetData(chanNum%,xData[],yData[]);
+        minX := xData[min(xData[])];
+        maxX := xData[max(xData[])];
+        minY := yData[min(yData[])];
+        maxY := yData[max(yData[])];
+    endif
+    
+    'update axes limit
+    XRange(minX-RANGELEEWAY*(maxX-minX),maxX+RANGELEEWAY*(maxX-minX));
+    YRange(chan%,minY-RANGELEEWAY*(maxY-minY),maxY+RANGELEEWAY*(maxY-minY));
+end
+
+
+'******************************************************************************
+'* .res -> .smr conversion                                                    *
+'******************************************************************************
+Func res2smr%(resFile%)
+    var smrFile%;
+    var maxIndex%,minIndex%;                                        ' array indexes of maximum and minimum points
+    var maxLev,minLev,mid;                                            ' Maximum, minimum and mid points for scaling purposes
+    var scale;                                                            ' scale factor
+    var label$,units$;
+    var tempChan%;                                                        ' Memory channel to import data
+    var num%;                                                            ' Number of bins in result view    
+    var bSize;                                                            ' bin size
+    var tTime;                                                            ' Length of result view
+    var chans%, chi%, chan%;                                       ' Number of channels & channel counter
+    var cl%[200];                                                        ' An array to hold actual channel numbers
+    
+    View(resFile%);
+    tTime:=BinToX(MaxTime())-BinToX(0);                                                ' Total time range
+    chans% := ChanList(cl%[], 1+16384);                            ' Get actual channel count, not duplicates
+    smrFile%:=FileNew(7,0,2,2,tTime);                            ' Create new smr file
+    bSize:=View(resFile%).BinSize();                                ' Get bin size - same for all channels
+    for chi% := 1 to chans% do
+        chan% := cl%[chi%];                                            ' Get the actual channel number
+        if (chan% <= 100) then                                        ' Only convert if it is a disk channel
+            ChanNew(chan%,9,0,bSize);
+            ChanWriteWave(chan%,View(resFile%, chan%).[],0.0);
+            '            maxIndex% := Max(View(resFile%, chan%).[]);        ' Get indexes of max and min levels    
+            '            minIndex% := Min(View(resFile%, chan%).[]);                            
+            '            maxLev := View(resFile%, chan%).[maxIndex%];        ' Get max and min levels    
+            '            minLev := View(resFile%, chan%).[minIndex%];
+            '            mid := minLev + ((maxLev-minLev)/2);                ' Get mid point
+            '            scale := (maxLev-minLev)/10;                            ' Calculate scale factor for waveform channel
+            label$ := view(resFile%).ChanTitle$(chan%);
+            units$ := view(resFile%).ChanUnits$(chan%);
+            '            num%:=View(resFile%).MaxTime();
+            '            tempChan%:=MemChan(1,0,bSize);                        ' Set memory channel 
+            ChanScale(chan%,scale);                            ' Set scale and offset to fit result data
+            ChanOffset(chan%,mid);
+            ChanTitle$(chan%,label$);
+            ChanUnits$(chan%, units$);
+            '            MemSetItem(tempChan%,0,0,View(resFile%, chan%).[]);' Add data to memory channel    
+            '            MemSave(tempChan%,chan%);                                ' Save to permanent channel    
+            '            ChanDelete(tempChan%,0);                                ' Delete original channel    
+            ChanShow(chan%);                                            ' Show channel
+            YRange(chan%, view(resFile%).YLow(chan%), view(resFile%).YHigh(chan%)); 'restore YRange
+        endif
+    next                                                                    ' On to the next channel
+    XRange(binToSMR(view(resFile%).XLow(), resFile%),binToSMR(view(resFile%).XHigh(), resFile%));
+    return smrFile%;
+end
+
+'** function to convert an x-axis time in a result view
+'** to the same point in the time view obtained with res2smr%()
+func xToSMR(resTime, resHdl%)
+    var bin;
+    var result;
+    bin := view(resHdl%).XToBin(resTime);
+    result := bin*view(resHdl%).BinSize();
+    return result;
+end
+
+'** function to convert a bin number in a result view
+'** to the same point in the time view obtained with res2smr%()
+func binToSMR(bin, resHdl%)
+    var result;
+    result := bin*view(resHdl%).BinSize();
+    return result;
+end
+
+
+'** function to create a copy of a result file
+'** arguments : - the handle of a result file
+'** returns: the handle of the copy or a negative number in case of errors
+func duplicateSRF%(oldHdl%)
+    var res% := -1;
+    if ViewKind(oldHdl%)<>4 then
+        return -1;
+    endif
+    var newHdl%;
+    var list%[1], nCh%, nBins%;
+    nCh% := view(oldHdl%).ChanList(list%, 0x2063ff); 'number of channels in a data file
+    newHdl% := SetResult(nCh%,
+                            view(oldHdl%).MaxTime(),
+                            view(oldHdl%).BinSize(),
+                            view(oldHdl%).BinToX(0),
+                            view(oldHdl%).WindowTitle$(),
+                            view(oldHdl%).XUnits$(),
+                            "",
+                            view(oldHdl%).XTitle$());
+    if newHdl%<0 then
+        return newHdl%;
+    endif
+    var i%;
+    view(newHdl%);
+    'process each channel
+    for i% := 1 to nCh% do
+        ChanTitle$(i%, view(oldHdl%).ChanTitle$(i%));
+        ChanUnits$(i%, view(oldHdl%).ChanUnits$(i%));
+        ArrConst(view(newHdl%, i%).[], view(oldHdl%, i%).[]);
+        DrawMode(i%,    view(oldHdl%).DrawMode(i%),
+        view(oldHdl%).DrawMode(i%, -2),
+        view(oldHdl%).DrawMode(i%, -13),
+        view(oldHdl%).DrawMode(i%, -14));
+        YRange(i%, view(oldHdl%).YLow(i%), view(oldHdl%).YHigh(i%));
+    next
+    XRange(view(oldHdl%).BinToX(view(oldHdl%).XLow()), view(oldHdl%).BinToX(view(oldHdl%).XHigh()));
+end
+
+
+'** function to convert a lvl channel to an Event channel.
+'** arguments: - the lvl channel #
+'**            - the transition to select : -- low to high: lowHighTransition%
+'**                                         -- high to low: highLowTransition%
+'**            - the time at which to start the conversion
+'**            - the time at which to end the conversion
+const lowHighTransition% := 1;
+const highLowTransition% := 2;
+func lvl2Evt%(lvlChan%, transition%, startPos, endPos)
+    var tempChan%;
+    var returnChan%;
+    if transition%<>lowHighTransition% and transition%<>highLowTransition% then
+        PrintLog("lvl2Evt(): invalid value for transition%");
+        returnChan% := -1;
+    else
+        docase
+        case transition%=lowHighTransition% then
+            returnChan% := MemChan(3); 'create an Evt+ channel
+        case transition%=highLowTransition% then
+            returnChan% := MemChan(2); 'create an Evt- channel
+        endcase
+        tempChan% := MemChan(5);
+        if tempChan%>0 and returnChan%>0 then
+            MemImport(tempChan%,lvlChan%,startPos,endPos);
+            
+            'mask the unwanted markers
+            MarkMask(tempChan%, 0);                  'set mode 0
+            MarkMask(tempChan%,-1, 1,-1);            'include everything (reset)
+            MarkMask(tempChan%, 0, 0, -1);           'exclude everything in layer 0
+            
+            docase
+            case transition%=lowHighTransition% then
+                MarkMask(tempChan%, 0, 1, 01); 'include code 01
+            case transition%=highLowTransition% then
+                MarkMask(tempChan%, 0, 1, 00); 'include code 00
+            endcase
+            
+            'import filtered channel into Evt+/- channel
+            MemImport(returnChan%, tempChan%,startPos,endPos);
+            
+            'delete temporary Marker Channel
+            ChanDelete(tempChan%, 0);
+        endif
+    endif
+    return returnChan%;
+end
+
+
+'******************************************************************************
+'* Cursor functions                                                           *
+'******************************************************************************
+var cursorExistsList%[nbMaxCursors%];
+var cursorPosList[nbMaxCursors%];
+
+var hCursorExistsList%[nbMaxHCursors%];
+var hCursorPosList[nbMaxHCursors%];
+var hCursorChanList%[nbMaxHCursors%];
+
+proc saveCursors()
+    var i%;
+    
+    'reset cursor saves
+    ArrConst(cursorExistsList%[],0);
+    ArrConst(cursorPosList[],0);
+    ArrConst(hCursorExistsList%[],0);
+    ArrConst(hCursorPosList[],0);
+    ArrConst(hCursorChanList%[],0);
+    
+    for i% := 0 to nbMaxCursors%-1 do
+        if CursorExists(i%) then
+            cursorExistsList%[i%] := 1;
+            cursorPosList[i%] := Cursor(i%);
+        endif
+    next
+    
+    for i% := 1 to nbMaxHCursors% do
+        if HCursorExists(i%) then
+            hCursorExistsList%[i%-1] := 1;
+            hCursorPosList[i%-1] := HCursor(i%);
+            hCursorChanList%[i%-1] := HCursorChan(i%);
+        endif
+    next
+end
+
+proc restoreCursors()
+    'delete all cursors
+    CursorDelete(-1);
+    HCursorDelete(-1);
+    
+    var i%;
+    for i% := 0 to nbMaxCursors%-1 do
+        if cursorExistsList%[i%] then
+            CursorNew(cursorPosList[i%], i%);
+        endif
+    next
+    
+    for i% := 0 to nbMaxHCursors%-1 do
+        if hCursorExistsList%[i%] then
+            HCursorNew(hCursorChanList%[i%], hCursorPosList[i%]);
+        endif
+    next
+end
+
+
+'******************************************************************************
+'* Date/Time functions                                                        *
+'******************************************************************************
+func getUnixTime%()
+    'this function doesnt actually returns unix time.
+    'it does not take into account the time zone and the exact number of days per month
+    'plus a lot of other things
+    var time%[6];
+    var unixTime%;
+    const secondsInAMin% := 60;
+    const secondsInAHour% := 60*secondsInAMin%;
+    const secondsInADay% := 24*secondsInAHour%;
+    const secondsInAMonth% := 30.4368499*secondsInADay%;
+    const secondsInAYear% := 12*secondsInAMonth%;
+    TimeDate(time%[]);
+    time%[5] -= 1970; 'Unix time starts at 00:00:00 UTC on jan 1st 1970
+    unixTime% := time%[0]
+    + time%[1]*secondsInAMin%
+    + time%[2]*secondsInAHour%
+    + time%[3]*secondsInADay%
+    + time%[4]*secondsInAMonth%
+    + time%[5]*secondsInAYear%;
+    return unixTime%;
+end
+
+func validateDate%(inDate$)
+    'this function returns 1 if the date is valid and conforms to the format
+    'dd/mm/yyyy
+    '
+    'WARNING: to help the user detect wrong dates, this function only works for
+    'dates between 2010 and 2050!
+    '
+    var out%, dd%, mm%, yyyy%;
+    ReadSetup("/"); 'set / as a separator
+    out% := ReadStr(inDate$, dd%, mm%, yyyy%);
+    ReadSetup(); 'reverts ReadSetup to defaults
+    if out% <> 3 then
+        return 0;
+    endif
+    if dd%<1 or dd%>31 then
+        return -1;
+    endif
+    if mm%<1 or mm%>12 then
+        return -2;
+    endif
+    if yyyy%<2010 or yyyy%>2050 then
+        return -3;
+    endif
+    return 1;
+end
+
+'******************************************************************************
+'* Dialog Functions                                                           *
+'******************************************************************************
+func custMessage(text$, scr%)
+    DlgCreate("Message",0,0,0,0,0,scr%);
+    DlgText(text$,0,1);
+    DlgButton(0,""); 'delete cancel button
+    DlgShow();
+end
+
+func custQuery(text$, scr%)
+    DlgCreate("Query",0,0,0,0,0,scr%);
+    DlgText(text$,0,1);
+    DlgButton(0,"No");
+    DlgButton(1,"Yes");
+    return DlgShow();
+end

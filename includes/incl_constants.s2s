@@ -1,0 +1,61 @@
+'#### incl_constants.s2s
+'#### Marin Manuel
+'#
+'# Global constants
+
+'mathematical constants
+const   inf             := 1e100;
+const   inf%            := 2147483647;
+const   pi              := 3.141592653589793;
+
+'file extensions
+const   dataFileExt$    := ".smr";
+const   seqFileExt$     := ".pls";
+const   txtFileExt$     := ".txt";
+const   scriptFileExt$  := ".s2s";
+const   xyFileExt$      := ".sxy";
+const   resultFileExt$  := ".srf";
+const   resourceFileExt$:= ".s2r";
+const   configFileExt$  := ".s2c";
+const   filterFileExt$  := ".cfb";
+const   axonFileExt$    := ".abf";
+const   extDataFileExt$ := ".dat";
+var     ext$[13];
+        ext$[0]         := dataFileExt$;
+        ext$[1]         := txtFileExt$;
+        ext$[2]         := seqFileExt$;
+        ext$[3]         := scriptFileExt$;
+        ext$[4]         := resultFileExt$;
+        ext$[8]         := txtFileExt$;
+        ext$[9]         := extDataFileExt$;
+        ext$[12]        := xyFileExt$;
+
+
+'channel numbers
+var   VmChan%           := 1;
+var   ImChan%           := 2;
+var   drpChan%          := 3;
+var   forceChan%        := 4;
+var   emgChan%          := 5;
+var   VmACChan%         := 10;
+var   StimIntChan%      := 11;
+
+var   keyChan%          := 31;
+var   notesChan%        := 30;
+var   trig1Chan%        := 801;
+var   trig2Chan%        := 802;
+var   comOutChan%       := 803;
+var   stepActChan%      := 804;
+var   StimChan%         := 805;
+
+
+
+'others
+const bufferSize%       := 32768;
+const dotSz%            := 3;
+var scriptPath$;
+    scriptPath$ := View(App(3)).FileName$(1)+View(App(3)).FileName$(2);
+const expLogFileWidth% := 140;
+const expLogFileName$ := "experiment_log.txt";
+const nbMaxCursors% := 10;
+const nbMaxHCursors% := 4;

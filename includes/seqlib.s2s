@@ -1,0 +1,160 @@
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' SeqLib - a library of functions to help with calculations of sequencer
+'          variable values.
+'
+' This library is intended to be used via the include files mechanism, add
+'  #include "seqlib.s2s" to your script to make use of these functions.
+'  Users of older versions of Spike2 can simply copy the functions into
+'  their script.
+'
+' 08/Sep/08   Initial version by Tim Bergel.
+'
+' 18/Feb/10   Changed by Steven Clifford. Modified vhz%() to fix error which generated 
+'             incorrect frequency if tick value <> 1ms
+'             Previous version divided by tick value when is should have multiplied
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vdac32% function converts a value in user DAC units into an integer value
+'  (the result of the function) suitable for passing into a sequencer variable
+'  for use in the DAC, ADDAC, RAMP and OFFSET sequencer instructions. It mimics
+'  the vdac32() expression in the text sequence compiler.
+'
+' out     is the output value that you want to generate, in user DAC units.
+' scale   is the user DAC units corresponding to one volt on the actual DAC
+'         (or two volts for a ten-volt system). This is exactly the same as
+'         the DACscale field used with the SET or SDAC directives.
+' offset  is the user DAC units corresponding to zero volts output. This is
+'         exactly the same as the DACOffset field in SET or SDAC.
+'
+' If you want to use this function to calculate the slope for a ramp, use
+'  vdac32%(volts/sticks%(time)) for maximum accuracy.
+'
+func vdac32%(out, scale, offset)
+var v32;                                ' Real variable for the calculation
+out := out - offset;                    ' First compensate for offset
+v32 := ((out * (6553.6 / scale)) * 65536.0);   ' Floating point result
+var v32%;                               ' Integer value for the result
+if v32 > 2147483647.0 then              ' 2147483647 is the largest positive
+    v32% := 2147483647;                 '  integer value
+else
+    if v32 < -2147483647.0 then         ' -2147483648 is the lowest negative value
+        v32% := -2147483647;            '  but we have to stay one above that
+    else
+        v32% := round(v32);             ' We can be sure this will not overflow
+    endif;
+endif;
+return v32%;
+end
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vsz% function converts a cosine amplitude value in user DAC units into
+'  an integer value (the result of the function) suitable for passing into a
+'  sequencer variable for use in the SZ and SZINC sequencer instructions.
+'
+'  Note that, unlike these instructions, this function uses user DAC units
+'  rather than treating 1.0 as the maximum cosine amplitude.
+'
+' amp     is the amplitude of the cosine wave that you want to generate in
+'         user DAC units. The cosine wave will run from centre+amp to
+'         centre-amp. Negative values will work correctly with SZINC but
+'         not with SZ.
+' scale   is the user DAC units corresponding to one volt on the actual DAC
+'         (or two volts for a ten-volt system). This is exactly the same as
+'         the DACscale field used with the SET or SDAC directives.
+'
+func vsz%(amp, scale)
+var v16;                                ' Real variable for the calculation
+v16 := (abs(amp) * (6553.6 / scale));   ' Floating point result
+var v16%;                               ' Integer value for the result
+if v16 > 32768 then                     ' Limit to the allowed range of values
+    v16% := 32768;
+else
+    if v16 < -32768 then
+        v16% := -32768;
+    else
+        v16% := round(v16);             ' So we can be sure this is a legal value
+    endif;
+endif;
+return v16%;
+end
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vhz% function converts a cosine frequency in Hz into an integer value
+'  (the result of the function) suitable for passing into a sequencer variable
+'  for use in the RATE, RATEW, RINC and RINCW sequencer instructions. It mimics
+'  the vhz() expression in the text sequence compiler.
+'
+' hz      is the frequency in Hz to be converted.
+' tick    is the sequencer tick period in milliseconds. This is exactly the same
+'         as the msPerStep field in the SET and SCLK directives.
+'
+func vhz%(hz, tick)
+return vangle%(hz * 0.36 * tick);
+end
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vangle% function converts a value in degrees into an integer value (the
+'  result of the function) suitable for passing into a sequencer variable for
+'  use in the ANGLE and PHASE cosine control sequencer instructions. It mimics
+'  the vangle() expression in the text sequence compiler.
+'
+' It mimics the vangle expression in the text sequence compiler to make it
+'  easier to calculate sequencer variable values in your script.
+'
+' deg     is the phase angle in degrees to be converted.
+'
+func vangle%(deg)
+deg := deg mod 360;                     ' First of all handle stupid values
+if deg >= 180 then deg := deg-360 endif;' Then adjust to make the arithmetic easier
+if deg < -180 then deg := deg+360 endif;
+var v32;
+v32 := deg * 2147483648.0 / 180.0;      ' This result must be in integer range
+var v32%;
+if v32 > 2147483647.0 then              ' 2147483647 is the largest positive
+    v32% := 2147483647;                 '  integer value
+else
+    if v32 < -2147483647.0 then         ' -2147483648 is the lowest negative value
+        v32% := -2147483647;            '  but we have to stay one above that
+    else
+        v32% := round(v32);             ' We can be sure this will not overflow
+    endif;
+endif;
+return v32%;                            ' So we can return as an integer
+end
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vdig% function converts a required digital output value (from 0 to 255)
+'  into an integer value (the result of the function) suitable for passing into
+'  a sequencer variable for use in the DIGOUT and DIGLOW sequencer instructions.
+'
+' This function does not support the more complex aspects of these instructions
+'  (leaving outputs unchanged or inverted) but it is fine for simple use where
+'  one simply wants to set all 8 outputs to a given state.
+'
+' dig%    is the digital output value required, from 0 to 255. Values outside
+'         this range will be limited.
+'
+func vdig%(dig%)
+if dig% > 255 then dig% := 255 endif;   ' Limit stupid values
+if dig% < 0 then dig% := 0 endif;
+return dig% * 256;                      ' and calculate the result
+end;
+
+'''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+'
+' The vticks% function converts a value in seconds into a sequencer tick count
+'  (the result of the function) suitable for passing into a sequencer variable.
+'  It mimics the s() expression in the text sequence compiler.
+'
+' secs    is the time in seconds to be converted.
+' tick    is the sequencer tick period in milliseconds. This is exactly the same
+'         as the msPerStep field in the SET and SCLK directives.
+'
+func vticks%(secs, tick)
+return round(secs * 1000 / tick);
+end

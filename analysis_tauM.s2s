@@ -1,0 +1,328 @@
+'#### analysis_tauM.s2s
+'#### Marin Manuel
+'#
+'# measures tauM & tau1 on small hyperpolarizing pulses
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+'## Global Constants
+const avgWidth  := 25e-3; 's
+const avgOffset :=  5e-3; 's
+const nbPointsForSlope% := 5; 'nb of points to be used to measure the slope of the curve
+const endOfResponsePercent := 0.999; 'percentage of repolarization to find the end of the response
+const idlePeriod := 0.5; 's - time period between 2 exec of the idle function
+
+const lnChanColor := 24;
+const peelChanColor := 28;
+const lnChanDotSize := 4;
+
+var theFileName$;
+
+'## Global variables
+var startPos, endPos;
+var ok%;
+var dataHdl%;
+var srfHdl%;
+var resultHdl%;
+var binSz;
+var ImChanProcessed%;
+var memChanCreated%;
+var slopeChan%;
+var lnChan%;
+var peelChan%;
+var firstRun% := 1;
+
+var Vr;
+var pulsePeakPos := -1;
+var pulsePeak;
+var pulseAmpl;
+var endPulsePos := -1;
+
+var pos1,pos1Cur%;
+var pos2,pos2Cur%;
+var pos3,pos3Cur%;
+var pos4,pos4Cur%;
+
+var tauMexp,tauMlin;
+var tau1exp,tau1lin;
+var L;
+
+
+'## Start of the Script
+dataHdl% := view();
+if ViewKind(dataHdl%)<>0 then
+    Message("Error: Script must be run on a Time View");
+    halt
+endif
+startPos := XLow();
+endPos := XHigh();
+comOutChan% := 802; 'default to Trig2
+
+Vr := ChanMeasure(VmChan%,2,startPos, endPos);
+theFileName$ := FileName$(3)+FileName$(4);
+
+'dialog box
+DlgCreate("TauM Measurement");
+DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
+DlgChan(3,"Pulse start event Channel", 0x2+0x4+0x8+0x20);
+DlgXValue(4, "Start analysis at");
+DlgXValue(5, "  End analysis at");
+ok% := DlgShow(VmChan%, ImChan%, comOutChan%, startPos, endPos);
+if ok% then
+    if ChanKind(comOutChan%)=4 then
+        'if we have a lvl chan as a marker channel, transform it in into
+        'a Evt+ channel marking the low-high transitions
+        comOutChan% := lvl2Evt%(comOutChan%, lowHighTransition%, startPos, endPos);
+        if comOutChan%<=0 then
+            Message("Error when creating Event channel");
+            halt
+        else
+            memChanCreated% := 1;
+        endif
+    endif
+    
+    binSz := BinSize(VmChan%);
+    if BinSize(ImChan%)<>binSz then
+        'add process to make sure binSize are matched
+        ChanProcessAdd(7,VmChan%);
+        ImChanProcessed% := 1;
+    endif
+    
+    
+    srfHdl%:=SetAverage(Print$("%d,%d",VmChan%,ImChan%),avgWidth/binSz,avgOffset,comOutChan%,1+4,3);
+    if srfHdl%>0 then
+        view(srfHdl%).Process(startPos, endPos, 1, 1);
+        view(srfHdl%).DrawMode(-1,2,1,0);
+        
+        resultHdl% := res2smr%(srfHdl%);
+        VmChan% := 1;
+        ImChan% := 2;
+        if resultHdl% > 0 then
+            view(srfHdl%);FileClose(0,-1);
+            view(resultHdl%);
+            
+            'this following part attemps to position the cursors roughly at the right position
+            
+            'find the peak of the pulse response as the min value on chan1
+            pulsePeakPos := ChanSearch(1, 2, 0, MaxTime());
+            if pulsePeakPos >= 0 then
+                pulsePeak := ChanValue(1, pulsePeakPos);
+                pulseAmpl := abs(pulsePeak - Vr);
+                
+                'find the end of the pulse response
+                endPulsePos := ChanSearch(1, 7, pulsePeakPos, MaxTime(), Vr-(1-endOfResponsePercent)*pulseAmpl);
+            endif
+            
+            if pulsePeakPos>0 then
+                pos1 := pulsePeakPos;
+            else
+                pos1 := 1e-3;
+            endif
+            
+            if endPulsePos>0 then
+                pos4 := endPulsePos;
+            else
+                pos4 := MaxTime();
+            endif
+            
+            pos2 := pos1 + (0.3)*(pos4-pos1); 'pos3 at 30% of the interval pos1-pos4
+            pos3 := pos1 + (0.4)*(pos4-pos1); 'pos3 at 40% of the interval pos1-pos4
+            
+            CursorDelete(-1);
+            pos1Cur% := CursorNew(pos1);
+            pos2Cur% := CursorNew(pos2);
+            pos3Cur% := CursorNew(pos3);
+            pos4Cur% := CursorNew(pos4);
+            
+            'end of cursor placement
+            
+            'create a duplicate of Vm and remove DC offset
+            slopeChan% := ChanDuplicate(1);
+            ChanProcessAdd(slopeChan%, 2, 1000);
+            ChanProcessAdd(slopeChan%, 0);
+            '            'create a duplicate of Vm and get slope
+            '            slopeChan% := ChanDuplicate(1);
+            '            ChanProcessAdd(slopeChan%, 3, nbPointsForSlope%*binSz);
+            
+            'create a virtual chan for the log
+            lnChan% := VirtualChan(0, Print$("ln(Ch(%d))",slopeChan%),1);
+            
+            if slopeChan%>0 and lnChan%>0 then
+                'get first estimation of time constants
+                peelChan% := getMeasures%(pos1,pos2,pos3,pos4, tauMexp, tau1exp, tauMlin, tau1lin, L);
+                
+                'adjust diplay
+                var margin;
+                margin := (0.05)*abs(pos4-pos1);
+                XRange(pos1-margin,pos4+margin);
+                ChanShow(lnChan%);
+                
+                ChanColour(lnChan%, 1, lnChanColor);
+                DrawMode(lnChan%, 1, lnChanDotSize);
+                
+                ChanOrder(-256,1,2);   'drop ImChan%(2) at bottom
+                ChanOrder(0,-1,lnChan%);   'drop lnChan% on top
+                
+                if peelChan%>0 then
+                    ChanShow(peelChan%);
+                    ChanOrder(lnChan%,1,peelChan%); 'put peelChan below lnChan%
+                    ChanColour(lnChan%, 1, peelChanColor);
+                    DrawMode(peelChan%, 1, lnChanDotSize);
+                endif
+                
+                Optimise(-1);
+                
+                view(dataHdl%).Window(50,0,100,70);
+                view(resultHdl%).Window(0,0,50,70);
+                view(LogHandle()).Window(0,70,100,100);
+                FrontView(resultHdl%);
+                
+                'create toolbar
+                var finished%:=0;
+                ok% := 0;
+                repeat
+                    ok% := Interact("Move Cursors",1+2+4+8+16+32+64+128+256+512,0,"&Finish","&Cancel","&Update");
+                    docase
+                    case ok%=1 then
+                        doMeasure%();
+                        finished%:=1;
+                    case ok%=2 then
+                        finished%:=1;
+                    case ok%=3 then
+                        doMeasure%();
+                        finished%:=0;
+                    endcase
+                until finished%;
+                if ok%=1 then
+                    doQuit%();
+                endif
+            else
+                Message("Error: impossible to create slope or log waveforms");
+            endif
+        else
+            Message("Error when converting avg file to time view");
+        endif
+    else
+        Message("Error when creating average file");
+    endif
+    
+    if ImChanProcessed% then
+        view(dataHdl%).ChanProcessClear(ImChan%, ChanProcessInfo(ImChan%));
+    endif
+    if memChanCreated% then
+        view(dataHdl%).ChanDelete(comOutChan%,0);
+    endif
+endif
+
+'get cursor positions, return estimated time constants (as ref values), and chan nb of peeled trace
+func getMeasures%(pos1,pos2,pos3,pos4, &tauMexp, &tau1exp, &tauMlin, &tau1lin, &L)
+    var oldHdl%;
+    var err;
+    var slope1, inter1;
+    var slope2, inter2;
+    
+    oldHdl% := view(resultHdl%);
+    
+    if ChanKind(peelChan%)<>9 then
+        peelChan% := VirtualChan(0, "",1);
+    endif
+    
+    'double exp fit on Vm (Ch 1)
+    ChanFit(1,0,0);   'clear fir
+    ChanFit(1,1,2);   'Initialise channel fit
+    ChanFit(1,1+2,pos1,pos4,pos1,err,1000);
+    ChanFitShow(1,1+2,XLow(),XHigh());   'Set up fit display
+    tau1exp := ChanFitCoef(1,1);
+    tauMexp := ChanFitCoef(1,3);
+    
+    'linear fit on ln(slope)
+    ChanFit(lnChan%,0,0);   'clear fir
+    ChanFit(lnChan%,2,1);   'Initialise channel fit
+    ChanFit(lnChan%,1+2,pos3,pos4,0.0,err,1000);
+    ChanFitShow(lnChan%,1+2,XLow(),XHigh());   'Set up fit display
+    inter1 := ChanFitCoef(lnChan%,0);
+    slope1 := ChanFitCoef(lnChan%,1);
+    tauMlin := -1/slope1;
+    
+    'create virtualChan to hold peeling
+    VirtualChan(peelChan%, Print$("ln(ch(%d)-exp(%f)*exp(%f*WPoly(0, %f, 0,0,1)))",slopeChan%,inter1,slope1,MaxTime()),1);
+    if peelChan%>0 then
+        'linear fit on peeling
+        ChanFit(peelChan%,0,0);   'clear fir
+        ChanFit(peelChan%,2,1);   'Initialise channel fit
+        ChanFit(peelChan%,1+2,pos1,pos2,0.0,err,1000);
+        'Set up fit display
+        inter2 := ChanFitCoef(peelChan%,0);
+        slope2 := ChanFitCoef(peelChan%,1);
+        tau1lin := -1/slope2;
+        if (tauMlin/tau1lin - 1)>0 then
+            L := pi/sqrt(tauMlin/tau1lin - 1);
+        else
+            L := 0;
+        endif
+    endif
+    
+    view(oldHdl%);
+    return peelChan%;
+end
+
+func doMeasure%()
+    view(resultHdl%);
+    if Seconds()>idlePeriod then
+        if (Cursor(pos3Cur%)<>pos3 or
+            Cursor(pos4Cur%)<>pos4) then
+            'sets zoom on peel chan
+            YRange(peelChan%, ChanMeasure(peelChan%,9,pos1,pos3), ChanMeasure(peelChan%, 8,pos1,pos2));
+        endif
+        if (Cursor(pos1Cur%)<>pos1 or
+            Cursor(pos2Cur%)<>pos2 or
+            Cursor(pos3Cur%)<>pos3 or
+            Cursor(pos4Cur%)<>pos4) then
+            'one of the cursor has moved, do the calculations again
+            pos1 := Cursor(pos1Cur%);
+            pos2 := Cursor(pos2Cur%);
+            pos3 := Cursor(pos3Cur%);
+            pos4 := Cursor(pos4Cur%);
+            
+            peelChan% := getMeasures%(pos1,pos2,pos3,pos4, tauMexp, tau1exp, tauMlin, tau1lin, L);
+            ToolbarText(Print$("time constants (ms): tauM=%.2f tau1=%.2f - L=%.2f",tauMlin*1e3,tau1lin*1e3,L));
+        endif
+        ChanFitShow(VmChan%,1+2,XLow(),XHigh());
+        ChanFitShow(lnChan%,1+2,XLow(),XHigh());
+        ChanFitShow(peelChan%,1+2,XLow(),XHigh());
+        Seconds(0); 'reset the timer
+    endif
+    return 1;
+end
+
+proc prettify()
+    view(resultHdl%);
+    
+    
+end
+
+
+func doQuit%()
+    ToolbarClear(0);
+    
+    PrintLog("--------------------------------------------------------------------------------\n");
+    PrintLog("file: %s - %s %s\n", view(dataHdl%).FileName$(3)+view(dataHdl%).FileName$(4)+view(dataHdl%).FileName$(5), Date$(), Time$());
+    PrintLog("average : [%.2f - %.2f (s)]\n",startPos, endPos);
+    PrintLog("tauM [%.2f - %.2f (ms)]: %.2f (ms)\n",pos3*1e3,pos4*1e3,tauMlin*1e3);
+    PrintLog("tau1 [%.2f - %.2f (ms)]: %.2f (ms)\n",pos1*1e3,pos2*1e3,tau1lin*1e3);
+    PrintLog("L: %.2f\n",L);
+    PrintLog("%.2f\t%.2f\t%.2f\t%s\n",tauMlin*1e3,tau1lin*1e3,L,theFileName$);
+    
+    return 0;
+end
+
+
+
+

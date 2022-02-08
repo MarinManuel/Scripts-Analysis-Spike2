@@ -1,0 +1,233 @@
+'#### incl_forceTransducerFunctions.s2s
+'#### Marin Manuel
+'#
+'# this file provides functions to control the force transducer as implemented
+'# by 2 CyberAmp channels in series
+
+#include "incl_locals.s2s"
+#include "incl_constants.s2s"
+#include "incl_globalVariables.s2s"
+#include "incl_utilFunctions.s2s"
+
+const SERIALTERMSTRING$ := "\r";
+const SERIALANSWERTERMSTRING$ := ">";
+const SERIALTIMEOUT := 1; 's
+const PREGAINSTRING$ := "P=";
+const GAINSTRINGLENGTH := 3;
+const POSTGAINSTRING$ := "O=";
+const NBGAINSAVAILABLE% := 10;
+const ZEROOFFSETCOMMAND$ := "AT%d Z%d";
+const ZERODCCOMMAND$ := "AT%d D%d +0";
+const SETALLGAINSCOMMAND$ := "AT%d G%d P%03d G%d O%03d";
+const SETPREGAINCOMMAND$ :=  "AT%d G%d P%03d";
+const SETPOSTGAINCOMMAND$ := "AT%d G%d O%03d";
+const GETSTATUSCOMMAND$ := "AT%d S%d";
+
+const FORCEDELAY := 0.1;
+const FORCELOWPASSFILTER% := 1000;
+
+const GAINCHANGEDSTRING$ := "TransducerModel=%s|ForceGain=%03d|";
+
+var offsetAmpInitString$;
+offsetAmpInitString$ := Print$("AT%d C%d+DC C%d-DC G%dP%03d G%dO%03d F%d-", 
+                               forceDeviceId%, forceOffsetAmp%, forceOffsetAmp%, forceOffsetAmp%, 1, forceOffsetAmp%, 1, forceOffsetAmp%);
+var gainAmpInitString$;
+gainAmpInitString$ := Print$("AT%d C%d+DC C%d-DC F%d%d",
+                             forceDeviceId%, forceGainAmp%, forceGainAmp%, forceGainAmp%, FORCELOWPASSFILTER%);
+
+const forceUnit$ := "mN";
+
+var forceSerialAvailable%;
+
+const nbForceTransducers% := 4;
+var forceTransducters$[nbForceTransducers%];
+forceTransducters$[0] := "Aurora 404A";
+forceTransducters$[1] := "Futek LSB200 10g (00011111)";
+forceTransducters$[2] := "Kulite BG300";
+forceTransducters$[3] := "Aurora 300C";
+
+
+var forceGains[NBGAINSAVAILABLE%], forcePreFiltGains[NBGAINSAVAILABLE%], forcePostFiltGains[NBGAINSAVAILABLE%], forceChanGains[nbForceTransducers%][NBGAINSAVAILABLE%];
+forceGains[ 0] := 1    ; forcePreFiltGains[ 0] := 1    ; forcePostFiltGains[ 0] := 1    ;
+forceGains[ 1] := 2    ; forcePreFiltGains[ 1] := 1    ; forcePostFiltGains[ 1] := 2    ;
+forceGains[ 2] := 5    ; forcePreFiltGains[ 2] := 1    ; forcePostFiltGains[ 2] := 5    ;
+forceGains[ 3] := 10   ; forcePreFiltGains[ 3] := 1    ; forcePostFiltGains[ 3] := 10   ;
+forceGains[ 4] := 20   ; forcePreFiltGains[ 4] := 1    ; forcePostFiltGains[ 4] := 20   ;
+forceGains[ 5] := 50   ; forcePreFiltGains[ 5] := 1    ; forcePostFiltGains[ 5] := 50   ;
+forceGains[ 6] := 100  ; forcePreFiltGains[ 6] := 1    ; forcePostFiltGains[ 6] := 100  ;
+forceGains[ 7] := 200  ; forcePreFiltGains[ 7] := 1    ; forcePostFiltGains[ 7] := 200  ;
+forceGains[ 8] := 500  ; forcePreFiltGains[ 8] := 10   ; forcePostFiltGains[ 8] := 50   ;
+forceGains[ 9] := 1000 ; forcePreFiltGains[ 9] := 10   ; forcePostFiltGains[ 9] := 100  ;
+
+'Aurora 404A
+'CALIB PERFORMED 19 sept 2017 by MM -- after replacing the hook
+'https://docs.google.com/spreadsheets/d/1qVoApHbbOxZnpcFrG4TL7jvL0NGKDsHYCoIdBxik_ew/edit#gid=454528196
+forceChanGains[0][ 0] := 11.123421030;
+forceChanGains[0][ 1] := 5.769474862;
+forceChanGains[0][ 2] := 2.237692134;
+forceChanGains[0][ 3] := 1.194988695;
+forceChanGains[0][ 4] := 0.554074944;
+forceChanGains[0][ 5] := 0.223299464;
+forceChanGains[0][ 6] := 0.111497800;
+forceChanGains[0][ 7] := 0.055710994;
+forceChanGains[0][ 8] := 0.022275310;
+forceChanGains[0][ 9] := 0.011136141;
+
+
+'Futek LSB200 10g
+'CALIB PERFORMED 19 sept 2016 by MM
+'https://docs.google.com/spreadsheets/d/1qVoApHbbOxZnpcFrG4TL7jvL0NGKDsHYCoIdBxik_ew/edit#gid=1078041350
+forceChanGains[1][ 0] := 9.503438995;
+forceChanGains[1][ 1] := 4.751719498;
+forceChanGains[1][ 2] := 1.900687799;
+forceChanGains[1][ 3] := 0.950343900;
+forceChanGains[1][ 4] := 0.475171950;
+forceChanGains[1][ 5] := 0.190068780;
+forceChanGains[1][ 6] := 0.095034390;
+forceChanGains[1][ 7] := 0.047517195;
+forceChanGains[1][ 8] := 0.019006878;
+forceChanGains[1][ 9] := 0.009503439;
+
+'Kulite BG-300
+'these values were obtained by calibrating the force transducer with different weights
+'the values are negative to account for the fact that we're measuring force PULLING on the force transducer
+'CALIB PERFORMED 13/05/2016 by Lulu
+forceChanGains[ 2][ 0] := -4845.9708175637366311780070460416;  '20160513 calib BG300 - gain 1a.sxy
+forceChanGains[ 2][ 1] := -2412.7547869054972205064854848672;  '20160513 calib BG300 - gain 2a.sxy
+forceChanGains[ 2][ 2] := -967.66077683807164560391709082464;  '20160513 calib BG300 - gain 5a.sxy
+forceChanGains[ 2][ 3] :=  -493.54931051161321527633825895545;  '20160513 calib BG300 - gain 10a.sxy
+forceChanGains[ 2][ 4] :=  -231.14279308328305977583771926783;  '20160513 calib BG300 - gain 20a.sxy
+forceChanGains[ 2][ 5] :=  -95.278929064837311228621790291077;  '20160513 calib BG300 - gain 50a.sxy
+forceChanGains[ 2][ 6] :=   -48.172805487846001175416453903442;  '20160513 calib BG300 - gain 100a.sxy
+forceChanGains[ 2][ 7] :=   -22.178751868559844926166935029564;  '20160513 calib BG300 - gain 200b.sxy
+forceChanGains[ 2][ 8] :=   -9.1988703787174934917992070573734;  '20160513 calib BG300 - gain 500b.sxy
+forceChanGains[ 2][ 9] :=   -4.4741512177207886246315983887329;  '20160513 calib BG300 - gain 1000b.sxy
+
+
+'Aurora 300C
+'calibrated by Lulu on june 30th 2017
+forceChanGains[ 3][ 0] := 98.6494885;
+forceChanGains[ 3][ 1] := 49.85541928;
+forceChanGains[ 3][ 2] := 19.81865927;
+forceChanGains[ 3][ 3] := 9.921619208; 
+forceChanGains[ 3][ 4] := 4.99850045;
+forceChanGains[ 3][ 5] := 1.978094581;
+forceChanGains[ 3][ 6] := 0.996323566;
+forceChanGains[ 3][ 7] := 0.4996901921;
+forceChanGains[ 3][ 8] := 0.1989024562;
+forceChanGains[ 3][ 9] := 0.1004072518;
+
+
+proc initForceSerial()
+    PrintLog("initializing Serial Communication with force transducer amp\n");
+    var retVal%;
+    retVal% := SerialOpen(forceSerialPort%, forceSerialBaud%, forceSerialBits%, 
+                          forceSerialParity%, forceSerialStop%, forceSerialHsk%);
+    if retVal%=0 then
+        PrintLog("Serial Port %d successfully opened\n", forceSerialPort%);
+        forceSerialAvailable% := 1;
+        forceSendCommand$(offsetAmpInitString$);
+        forceSendCommand$(gainAmpInitString$);
+    else
+        Message("Error: serial port %d cannot be opened:\n%s",forceSerialPort%,Error$(retVal%));
+        forceSerialAvailable% := 0;
+    endif
+end
+
+
+proc forceRemoveOffset()
+'    PrintLog("Removing offset on chan %d\n",forceOffsetAmp%); '#DEBUG
+    forceSendCommand$(Print$(ZEROOFFSETCOMMAND$,forceDeviceId%,forceOffsetAmp%));
+    Yield(FORCEDELAY);
+'    PrintLog("Removing offset on chan %d\n",forceGainAmp%); '#DEBUG
+    forceSendCommand$(Print$(ZEROOFFSETCOMMAND$,forceDeviceId%,forceGainAmp%));
+    Yield(FORCEDELAY);
+end
+
+proc forceSetGain(gainId%)
+    if gainId%>=0 and gainId%<len(forceGains[]) then
+        forceSendCommand$(Print$(SETALLGAINSCOMMAND$,forceDeviceId%,forceOffsetAmp%,1,forceOffsetAmp%,1));
+        forceSendCommand$(Print$(SETALLGAINSCOMMAND$,forceDeviceId%,forceGainAmp%,forcePreFiltGains[gainId%],forceGainAmp%,forcePostFiltGains[gainId%]));
+    endif
+end
+
+func forceGetGain()
+    var retVal;
+    var answer$;
+    var preGain, preGainStr$, postGain, postGainStr$;
+    answer$ := forceSendCommand$(Print$(GETSTATUSCOMMAND$,forceDeviceId%,forceGainAmp%));
+    'parse the answer to ge the pre- and post-filter gains
+    'return the product of the two gains
+    if len(answer$)>0 then
+        var pos%;
+        pos% := InStr(answer$, PREGAINSTRING$);
+        preGainStr$ := Mid$(answer$, pos%+len(PREGAINSTRING$), GAINSTRINGLENGTH);
+        pos% := InStr(answer$, POSTGAINSTRING$);
+        postGainStr$ := Mid$(answer$, pos%+len(POSTGAINSTRING$), GAINSTRINGLENGTH);
+        PrintLog("Got gains: (P)%s & (O)%s\n",preGainStr$, postGainStr$); '#DEBUG
+        preGain := Val(preGainStr$);
+        postGain := Val(postGainStr$);
+        retVal := preGain * postGain;
+    endif
+    return retVal;
+end
+
+
+func forceSendCommand$(command$)
+    var answer$;
+    var nbAnswer%;
+    if forceSerialAvailable% then
+        PrintLog("Sending '%s' to port COM%d\n",command$,forceSerialPort%); '#DEBUG
+        SerialWrite(forceSerialPort%, command$, SERIALTERMSTRING$);
+        Seconds(0);
+        repeat
+            nbAnswer% := SerialCount(forceSerialPort%, SERIALANSWERTERMSTRING$);
+        until nbAnswer%>0 or Seconds()>SERIALTIMEOUT;
+        if nbAnswer%>0 then
+            SerialRead(forceSerialPort%, answer$, SERIALANSWERTERMSTRING$);
+            PrintLog("Recieved answer '%s' after %f s\n",answer$,Seconds()); '#DEBUG
+        else
+            PrintLog("Timeout while waiting for answer\n"); '#DEBUG
+        endif
+    endif
+    return answer$;
+end
+
+proc forceAdjustChanGain(forceTransducerId%, gainId%)
+    if gainId%>=0 and gainId%<len(forceGains[]) and forceTransducerId%>=0 and forceTransducerId%<len(forceTransducters$[]) then
+        view(dataFileHdl%);
+        if ChanKind(forceChan%)=1 then
+            ChanOffset(forceChan%, 0.0);
+            ChanScale(forceChan%, forceChanGains[forceTransducerId%][gainId%]);
+            ChanUnits$(forceChan%, forceUnit$);
+            
+            if SampleStatus()=2 then
+                'We are currently sampling, add a note in the file
+                SampleText(Print$(GAINCHANGEDSTRING$,forceTransducters$[forceTransducerId%],forceGains[gainId%]));
+            endif
+        else
+            ChanOffset(forceChan%, 0.0);
+            ChanScale(forceChan%, 1.0);
+            ChanUnits$(forceChan%, "V");
+        endif
+    endif
+end
+
+func forceGetGainId%()
+    var retVal% := -1;
+    var gain;
+    gain := forceGetGain();
+    retVal% := ArrHasFloat%(forceGains[],gain);
+    currForceGainId% := retVal%;
+    return retVal%;
+end
+
+func zeroDC%()
+    if forceSerialAvailable% then
+        forceSendCommand$(Print$(ZERODCCOMMAND$,forceDeviceId%,forceOffsetAmp%));
+        forceSendCommand$(Print$(ZERODCCOMMAND$,forceDeviceId%,forceGainAmp%));
+    endif
+    return 1;
+end
+
+

@@ -1,0 +1,87 @@
+'analysis_ForceSag.s2s
+
+#include "includes/incl_constants.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+const AVGTIME := 1e-3;'s
+
+var ok%;
+var startTime,endTime;
+
+startTime := XLow();
+endTime := XHigh();
+
+DlgCreate("Analysis Parameters");
+DlgChan(1,"Force Channel", 0x1+0x10+0x200);
+DlgChan(2,"Train start event Channel", 0x2+0x8+0x20);
+DlgChan(3,"Pulse start event Channel", 0x2+0x8+0x20);
+DlgXValue(4,"Start analysis at");
+DlgXValue(5,"  End analysis at");
+ok% := DlgShow(forceChan%,trig1Chan%,trig2Chan%,startTime,endTime);
+
+if not ok% then
+    halt
+endif
+
+CursorDelete(-1);
+HCursorDelete(-1);
+
+var startTrainTime,maxForceTime,secPulseTime,tw1Time,lastTwTime;
+var baselineForce,maxForce,plateauForce,tw1Force;
+var lastEventTime;
+'
+'sag = force at end (plateau) / max force
+'
+startTrainTime := NextTime(trig1Chan%,startTime);
+baselineForce := ChanMeasure(forceChan%,2,startTime,startTrainTime);
+'find time of max force and then take an avg around that time to account for noise
+maxForceTime := ChanSearch(forceChan%,1,startTime,endTime);
+maxForce := ChanMeasure(forceChan%,2,maxForceTime-AVGTIME/2.0,maxForceTime+AVGTIME/2.0)-baselineForce;
+
+lastEventTime := LastTime(trig2Chan%,endTime);
+lastTwTime := ChanSearch(forceChan%,1,lastEventTime,endTime);
+plateauForce := ChanMeasure(forceChan%,2,lastTwTime-AVGTIME/2.0,lastTwTime+AVGTIME/2.0)-baselineForce;
+
+
+'
+' index = twitch at 500ms / first twitch
+'
+if ChanKind(trig2Chan%)=5 then
+    secPulseTime := NextTime(trig2Chan%,startTrainTime); 'second pulse time
+    secPulseTime := NextTime(trig2Chan%,secPulseTime); 'second pulse time
+else
+    secPulseTime := NextTime(trig2Chan%,startTrainTime); 'second pulse time
+endif
+'the first twitch is between the first and second pulses
+tw1Time := ChanSearch(forceChan%,1,startTrainTime,secPulseTime);
+tw1Force := ChanValue(forceChan%,tw1Time);
+
+
+
+'cursors
+var baselineCursor%, maxForceCursor%, platForceCursor%;
+var tw1Cursor%,twIdxCursor%;
+baselineCursor% := HCursorNew(forceChan%,baselineForce); HCursorLabel(4, baselineCursor%,"baseline");
+maxForceCursor% := HCursorNew(forceChan%,maxForce+baselineForce); HCursorLabel(4, maxForceCursor%,"max");
+platForceCursor% := HCursorNew(forceChan%,plateauForce+baselineForce); HCursorLabel(4, platForceCursor%,"plateau");
+
+tw1Cursor% := CursorNew(tw1Time); CursorLabel(4, tw1Cursor%,"1st Tw");
+twIdxCursor% := CursorNew(lastTwTime); CursorLabel(4, twIdxCursor%,"Idx Tw");
+
+
+'print log
+PrintLog("Sag Analysis of %s [%f : %f]\n",FileName$(3)+FileName$(4)+FileName$(5),startTime,endTime);
+PrintLog("Sag\tIndex\n");
+PrintLog("-------------------------------------------------\n");
+PrintLog("%g\t%g\n",plateauForce/maxForce,plateauForce/tw1Force);
+
+
+
+
+
+
+

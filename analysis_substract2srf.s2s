@@ -1,0 +1,65 @@
+'using two average files, creates a third file containing the substraction
+'of file one and two.
+'Marin MANUEL - Dec 2015
+
+
+#include "includes/incl_utilFunctions.s2s"
+var view1%, view2%, newHdl%;
+
+view1% := FileOpen("", 4, 1+2, "Choose file #1");
+view2% := FileOpen("", 4, 1+2, "Choose file #2");
+
+if view1%<0 or view2%<0 then
+    Message("ERROR while opening files");
+    halt;
+endif
+
+'make sure that the 2 files have the same number of bins
+var nBins%;
+nBins% := view(view1%).MaxTime();
+if view(view2%).MaxTime() <> nBins% then
+    Message("ERROR: the two files must contain the same number of bins");
+    halt
+endif
+
+'create a copy of file 1
+newHdl% := duplicateSRF%(view1%);
+if newHdl%<0 then
+    Message("ERROR while creating a duplicate of file #1");
+    halt;
+endif
+
+' change the name of the window
+view(newHdl%);
+WindowTitle$("Substracted view");
+
+' get the channel to substract
+var chan% := 1;
+var doRemOffset% := 1;
+var ok%;
+DlgCreate("Which channel to substract?");
+DlgChan(1, "Channel to substract", 0x1);
+DlgCheck(2, "Remove offset before substracting?");
+ok% := DlgShow(chan%, doRemOffset%);
+if ok% then
+    var view2Offset;
+    view2Offset := view(view2%, chan%).[0];
+    if doRemOffset% then
+        ArrSub(view(newHdl%, chan%).[], view(newHdl%, chan%).[0]);
+        ArrSub(view(view2%, chan%).[], view2Offset);
+    endif
+    
+    ArrSub(view(newHdl%, chan%).[], view(view2%, chan%).[]);
+    ChanTitle$(chan%, Print$("%s (#1-#2)", ChanTitle$(chan%)));
+    ChanComment$(chan%, Print$("%s - %s. Remove offset: %s", view(view1%).WindowTitle$(), view(view2%).WindowTitle$(), 
+                        doRemOffset%?"yes":"no"));
+    
+    if doRemOffset% then
+        'restore the offset on view #2
+        ArrAdd(view(view2%, chan%).[], view2Offset);
+    endif
+endif
+Optimise(chan%);
+FrontView(newHdl%);
+WindowVisible(1);
+

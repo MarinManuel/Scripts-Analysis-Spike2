@@ -1,0 +1,95 @@
+'analysis_createForceOverdrawAverage.s2s
+'Marin Manuel - March 2011
+'
+'this script takes a region of a force measurement, and
+'creates two windows: 1 with the overdraw of the traces
+'and the other one with the average for further analysis
+
+#include "includes/incl_constants.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+
+const maxChans% := 400;
+var dataViewHdl%,overdrawHdl%,avgHdl%;
+var tempChan%:=-3,chans%[maxChans%];
+var startPos,endPos;
+var avgWidth := 0.16, avgPreTrig:=0.01;
+var ok%;
+
+
+dataViewHdl% := View();
+
+
+DlgCreate("Params for overdraw and average");
+DlgChan(1, "Channel(s)", 1+16+512+262144+524288+1048576);
+DlgChan(2, "Trigger Channel", 0x2+0x8+0x20);
+DlgXValue(3, "Start analysis at");
+DlgXValue(4, "  End analysis at");
+DlgReal(5, "width (s)",0,Inf,0,0,0.1);
+DlgReal(6, "pre-trigger (s)",0,Inf,0,0,0.1);
+ok% := DlgShow(tempChan%,stimChan%,startPos,endPos,avgWidth,avgPreTrig);
+if ok% then
+    docase
+    case tempChan%>0 then
+        chans%[0] := 1;
+        chans%[1] := tempChan%;
+    case tempChan% = -1 then 'all channels
+        ChanList(chans%[],1+16+512);
+    case tempChan% = -2 then 'all visible
+        ChanList(chans%[],1+16+512+2048);
+    case tempChan% = -3 then 'selected
+        ChanList(chans%[],1+16+512+65536);
+    else
+        Message("ERROR: unexpected channel selected, aborting");
+        halt;
+    endcase
+    
+    'this is a work around to get the name of the file to be saved
+    'see http://www.ced.co.uk/phpBB3/viewtopic.php?f=15&t=286
+    var baseName$;
+    var tempHdl%;
+    tempHdl% := FileOpen("Spike2 data (*.smr)|*.smr||", 9, 1, "Set the file name for the exported file");
+    if tempHdl% > 0 then
+        baseName$ := FileName$(1)+FileName$(2)+FileName$(3)+FileName$(4);
+        yield(1.0);
+        FileClose(0,-1);        'close down the temporary binary file
+        view(dataViewHdl%);
+        ExportChanList(startPos,endPos,chans%[:chans%[0]+1],stimChan%); 'do preparations for exporting
+        FileSaveAs(baseName$+".smr",0, 1); 'Save with this name and overwrite binary file
+        FileSaveResource(baseName$+".s2r");
+    endif;
+    
+    overdrawHdl% := FileOpen(baseName$+".smr",0);
+    if overdrawHdl%>0 then
+        view(overdrawHdl%);
+        ViewTrigger(stimChan%,avgPreTrig,0,1,0,0,1);
+        ViewOverdraw(1,stimChan%,startPos,endPos);
+        var lastTrig;
+        lastTrig := LastTime(stimChan%,endPos);
+        if lastTrig > 0 then
+            XRange(lastTrig-avgPreTrig,lastTrig-avgPreTrig+avgWidth);
+        endif
+        Optimise(-1);
+        
+        view(dataViewHdl%).Window(0,0,100,33);
+        Window(0,33,50,100);
+        WindowVisible(1);
+    endif
+    
+    view(dataViewHdl%);
+    avgHdl% := SetAverage(chans%[],avgWidth/BinSize(chans%[1]),avgPreTrig,stimChan%,1+4,3);
+    if avgHdl% > 0 then
+        Process(startPos,endPos,1,1);
+        FileSaveAs(baseName$+"_avg.srf",4);
+        
+        view(dataViewHdl%).Window(0,0,100,33);
+        Window(50,33,100,100);
+        WindowVisible(1);
+    endif
+    
+endif
+

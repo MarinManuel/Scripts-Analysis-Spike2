@@ -1,0 +1,177 @@
+'#### incl_zapFunctions.s2s
+'#### Marin Manuel
+'#
+'# this script provides functions to perform ZAP analysis
+
+#include "incl_mathFunctions.s2s"
+
+func doZap%(VmChan%, ImChan%, freqStart, freqStop, filterSize%, &fr, &z1, &zFr, &q, printLog%)
+    'this function performs a ZAP analysis on a result view
+    'it returns the handle of the result view or a negative error code.
+    'if filterSize%>0 the function also attemps to estimage the varacteristic values of the impedance
+    var resHdl%;
+    var temp%, nbPoints%;
+    var binSz;
+    var doSmooth%;
+    var freqStep;
+    var resName$;
+    
+    if filterSize%>0 then
+        doSmooth%:=1;
+    endif
+    
+    resHdl% := view();
+    resName$ := FileName$(3)+FileName$(4);
+    
+    if ViewKind(resHdl%)<>4 then
+        'Error: current view must be a result view
+        return -1;
+    endif
+    if ChanKind(VmChan%)=0 or ChanKind(ImChan%)=0 then
+        'Error: channel does not exist
+        return -2;
+    endif
+    
+    'find the next power of 2 > Length of signal
+    temp% := Len(view(resHdl%, VmChan%).[]);
+    nbPoints% := 2;
+    while nbPoints%<temp% do
+        nbPoints%*=2;
+    wend
+    binSz := BinSize();
+    freqStep := 1/(nbPoints%*binSz);
+    
+    var vArr[nbPoints%], iArr[nbPoints%];
+    var vFFT[nbPoints%];
+    var iFFT[nbPoints%];
+    var vFFTCx[nbPoints%/2][2];
+    var iFFTCx[nbPoints%/2][2];
+    var z[nbPoints%/2][2];
+    var zMagn[nbPoints%/2];
+    var zSmth[nbPoints%/2];
+    
+    ArrConst(vArr[],ArrSum(view(resHdl%, VmChan%).[])/temp%);
+    ArrConst(vArr[:temp%], view(resHdl%, VmChan%).[]);
+    ArrConst(iArr[],ArrSum(view(resHdl%, ImChan%).[])/temp%);
+    ArrConst(iArr[:temp%], view(resHdl%, ImChan%).[]);
+    
+    'performs the FFTs
+    ArrConst(vFFT[], vArr[]);
+    ArrConst(iFFT[], iArr[]);
+    ArrFFT(vFFT[],1);
+    ArrFFT(iFFT[],1);
+    
+    'splits the Real and Imaginary components
+    ArrConst(vFFTCx[1:][0],vFFT[1:nbPoints%/2-1]);
+    ArrConst(vFFTCx[1:][1],vFFT[nbPoints%/2+1:nbPoints%/2-1]);
+    vFFTCx[0][0]:=vFFT[0];
+    vFFTCx[0][1]:=0;
+    ArrConst(iFFTCx[1:][0],iFFT[1:nbPoints%/2-1]);
+    ArrConst(iFFTCx[1:][1],iFFT[nbPoints%/2+1:nbPoints%/2-1]);
+    iFFTCx[0][0]:=iFFT[0];
+    iFFTCx[0][1]:=0;
+    
+    '        'plot power spectrum of V and I
+    '        var pVHdl%, pIHdl%;
+    '        pVHdl% := FileNew(12);
+    '        pIHdl% := FileNew(12);
+    '        if pVHdl%>0 then
+    '            view(pVHdl%);
+    '            absCxArr%(vFFTCx[][],zMagn[]);
+    '            XYAddData(1, zMagn[1:], freqStep, freqStep); 'remove the DC component
+    '            WindowVisible(1);
+    '        endif
+    '        if pIHdl%>0 then
+    '            view(pIHdl%);
+    '            absCxArr%(iFFTCx[][],zMagn[]);
+    '            XYAddData(1, zMagn[1:], freqStep, freqStep); 'remove the DC component
+    '            WindowVisible(1);
+    '        endif
+    
+    'Divide V/I
+    if DivCxArr%(vFFTCx[][],iFFTCx[][],z[][])>0 then
+        'get the magnitude of Z
+        if absCxArr%(z[][],zMagn[])>0 then
+            
+            var nbChans% := 1;
+            if doSmooth% then
+                ArrConst(zSmth[], zMagn[]);
+                ArrSmooth(zSmth[1:],filterSize%);
+                nbChans% += 1;
+            endif
+            
+            'plot z vs freq                    
+            'we only need to plot the region that interest us
+            var lowBin%, highBin%, nBins%;
+            lowBin% := round(freqStart/freqStep);
+            highBin% := round(freqStop/freqStep);
+            nBins% := highBin%-lowBin%;
+            
+            var zHdl%;
+            zHdl% := SetResult(nbChans%,nBins%,freqStep,lowBin%*freqStep,Print$("%s_Z",resName$),"Hz","","freq");
+            if zHdl%>0 then
+                ArrConst(view(zHdl%,1).[], zMagn[lowBin%:nBins%]);
+                
+                if doSmooth% then
+                    ArrConst(view(zHdl%,2).[], zSmth[lowBin%:nBins%]);
+                endif
+                
+                if doSmooth% then
+                    var curLow%, curZ1%, curFr%, curZFr%;
+                    fr := ChanSearch(2,17,XLow(),XHigh(),0,0,filterSize%*2); 'double the filter size to improve smoothness
+                    if fr>0 then
+                        fr := BinToX(Fr);
+                        zFr := ChanValue(2,Fr);
+                        z1 := ChanValue(2,1);
+                        q := zFr/z1;
+                        
+                        curLow% := CursorNew(XToBin(1.0));
+                        curFr% := CursorNew(XToBin(Fr));
+                        curZ1% := HCursorNew(2,z1);
+                        curZFr% := HCursorNew(2,zFr);
+                        
+                        CursorLabel(4,curLow%,"%.2p");
+                        CursorLabelPos(curLow%,100.0);
+                        CursorLabel(4,curFr%,"Fr: %.2p");
+                        CursorLabelPos(curFr%,100.0);
+                        HCursorLabel(4,curZ1%,"Z(1Hz): %.2p");
+                        HCursorLabelPos(curZ1%,0.0);
+                        HCursorLabel(4,curZFr%,"Z(Fr): %.2p");
+                        HCursorLabelPos(curZFr%,0.0);
+                        
+                        if printLog% then
+                            PrintLog("%s - %s %s\n", resName$, Date$(), Time$());
+                            PrintLog("Fr = %.2g Hz - Z(Fr) = %.2g MOhm\n", fr, zFr);
+                            PrintLog("Z(1Hz) = %.2g MOhm - Q = %.2g\n", z1, q);
+                            PrintLog("-----\n");
+                            PrintLog("%.6g\t%.6g\t%.6g\t%.6g\t%s",fr,zFr,z1,q,resName$);
+                            PrintLog("-----\n");
+                        endif
+                    endif
+                endif
+                
+                'pretty-fy        
+                DrawMode(-1,2,1,1);
+                XAxisAttrib(1);
+                ChanColour(1,1,26); 'baby blue
+                if doSmooth% then
+                    ChanColour(2,1,16); 'red
+                    ChanOrder(2,0,1); 'put 2 on top of 1
+                    YAxisLock(1,1,0);
+                endif
+                Optimise(-1);
+            else
+                'Error while creating a result view
+                return zHdl%;
+            endif
+        else
+            'Error while calculating the Magnitue of the complex array
+            return -4;
+        endif
+    else
+        'Error while diving the two complex arrays
+        return -3;
+    endif
+    return zHdl%;
+end
+

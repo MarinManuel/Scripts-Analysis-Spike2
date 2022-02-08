@@ -1,0 +1,22 @@
+var viewHdl%, dupl1Hdl%, dupl2Hdl%, dupl3Hdl%;
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+viewHdl% := view();
+dupl1Hdl% := WindowDuplicate();
+dupl2Hdl% := WindowDuplicate();
+dupl3Hdl% := WindowDuplicate();
+
+if dupl1Hdl%>0 and dupl2Hdl%>0 and dupl3Hdl%>0 then
+    view(viewHdl%).Window(0,0,100,40);
+    view(dupl1Hdl%).Window(0,40,33,100);
+    view(dupl2Hdl%).Window(33,40,66,100);
+    view(dupl3Hdl%).Window(66,40,100,100);
+    
+    view(dupl1Hdl%).WindowVisible(1);
+    view(dupl2Hdl%).WindowVisible(1);
+    view(dupl3Hdl%).WindowVisible(1);
+endif

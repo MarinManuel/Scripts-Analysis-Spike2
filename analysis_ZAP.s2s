@@ -1,0 +1,88 @@
+'#### analysis_ZAP.s2s
+'#### Marin Manuel
+'#
+'# plots the Impedance vs Freq of the response of a neuron to a ZAP
+
+#include "includes/incl_zapFunctions.s2s"
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+const VmChanItem% := 1;
+const ImChanItem% := 2;
+const startFreqItem% := 3;
+const endFreqItem% := 4;
+const doSmoothItem% := 5;
+const filterSizeItem% := 6;
+const filterLabelItem% := 7;
+
+
+VmChan% := 1;
+ImChan% := 2;    
+var logLow := 0.1, logHigh := 100; 
+var doSmooth% := 1;
+var filterSize% := 50;
+var dummy$, ok%;
+var resHdl%, zHdl%;
+var fr, z1, zFr, q;
+
+resHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+if ViewKind(resHdl%)=4 then
+    DlgCreate("Impedance measurement");
+    DlgChan(VmChanItem%,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(ImChanItem%,"Injected Current Channel", 0x1+0x10+0x200);
+    DlgReal(startFreqItem%,"Start frequency (Hz)",0.1,10000);
+    DlgReal(endFreqItem%,"End frequency (Hz)",0.1,10000);
+    DlgCheck(doSmoothItem%,"Smooth trace?");
+    DlgInteger(filterSizeItem%,"Smooth width (Points)",3,10000,0,0,2);
+    DlgLabel(filterLabelItem%,"                     ");
+    DlgAllow(0,0,dlgChanged%);
+    ok% := DlgShow(VmChan%, ImChan%, logLow, logHigh, doSmooth%, filterSize%, dummy$);
+    if ok% then
+        if not doSmooth% then
+            filterSize% := 0;
+        endif
+        zHdl% := doZap%(VmChan%, ImChan%, logLow, logHigh, filterSize%, fr, z1, zFr, q, 1);
+        if zHdl%>0 then
+            placeResults(resHdl%,zHdl%,1,1);
+        endif
+    endif
+else
+    Message("Error: this script must be run on a result file");
+    halt
+endif
+
+func dlgChanged%(item%)
+    var result% := 1;
+    var freqStep, binSz, nbPoints%;
+    var temp%;
+    var chan%;
+    docase
+    case item%=0 then
+        '1st call
+        'adjust state of items as if checkbox had been checked
+        dlgChanged%(doSmoothItem%);
+        dlgChanged%(filterSizeItem%);
+    case item%=doSmoothItem% then
+        DlgEnable(DlgValue(doSmoothItem%),filterSizeItem%,filterLabelItem%);
+    case item%=filterSizeItem% then
+        chan% := DlgValue(VmChanItem%);
+        temp% := Len(view(0, chan%).[]);
+        nbPoints% := 2;
+        while nbPoints%<temp% do
+            nbPoints%*=2;
+        wend
+        binSz := BinSize();
+        freqStep := 1/(nbPoints%*binSz);
+        DlgValue$(filterLabelItem%,Print$("i.e. %.2g Hz",DlgValue(filterSizeItem%)*freqStep));
+    endcase
+    return result%;
+end
+
+
+
+

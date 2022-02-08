@@ -1,0 +1,103 @@
+'#### analysis_Accomodation.s2s
+'#### Marin Manuel
+'# this script plots the spike voltage threshold versus the injectec current
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_IFcurve.s2s"
+
+const SLOPETIMECONSTANT := 5e-4;
+
+var viewHdl%;
+var xyHdl%,tempXYHdl%;
+var startTime,endTime;
+var plotThreshold% := 1;
+var ok%;
+var thrChan%;
+
+viewHdl% := view();
+startTime := 0.0;
+endTime := MaxTime();
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+main();
+
+func main()
+    DlgCreate("Parameters");
+    DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
+    DlgXValue(3,"Start analysis at");
+    DlgXValue(4,"  End analysis at");
+    DlgCheck(5,"put thresholds on Vm trace?");
+    ok% := DlgShow(VmChan%, ImChan%, startTime, endTime, plotThreshold%);
+    
+    if ok% then
+        var tempChan%;
+        tempChan% := ChanDuplicate(VmChan%);
+        ChanProcessAdd(tempChan%,3,SLOPETIMECONSTANT); 'Add Slope to channel tempChan%
+        xyHdl%:=MeasureToXY(7,tempChan%,0,IFCurveSpikeThreshold);
+        if xyHdl%>0 then
+            MeasureX(100,ImChan%,"Cursor(0)");
+            MeasureY(100,VmChan%,"Cursor(0)");
+            MeasureChan(1,"Spike Threshold",0);
+            Process(startTime, endTime, 1, 1);
+            
+            XTitle$(view(viewHdl%).ChanTitle$(ImChan%));
+            XUnits$(view(viewHdl%).ChanUnits$(ImChan%));
+            
+            ChanTitle$(0,"Spike Threshold");
+            ChanUnits$(0,view(viewHdl%).ChanUnits$(VmChan%));
+            
+            WindowVisible(1);
+        endif
+        view(viewHdl%);
+        if plotThreshold% then
+            tempXYHdl%:=MeasureToXY(7,tempChan%,0,IFCurveSpikeThreshold);
+            if tempXYHdl%>0 then
+                MeasureX(102,ImChan%,"Cursor(0)");
+                MeasureY(100,VmChan%,"Cursor(0)");
+                MeasureChan(1,"Spike Threshold",0);
+                Process(startTime, endTime, 1, 1);
+                
+                XTitle$(view(viewHdl%).XTitle$());
+                XUnits$(view(viewHdl%).XUnits$());
+                
+                ChanTitle$(0,"Spike Threshold");
+                ChanUnits$(0,view(viewHdl%).ChanUnits$(VmChan%));
+                
+                'WindowVisible(1);
+            endif
+            
+            var nbPoints%;
+            var i%;
+            nbPoints% := XYCount(1);
+            var timeData[nbPoints%],thrData[nbPoints%];
+            XYGetData(1, timeData[], thrData[]);
+            
+            view(tempXYHdl%);
+            FileClose(0,-1);
+            view(viewHdl%);
+            
+            thrChan% := MemChan(0, VmChan%);
+            if thrChan%>0 then
+                ChanTitle$(thrChan%, "Vthr");
+                for i% := 0 to nbPoints%-1 do
+                    MemSetItem(thrChan%,0,timeData[i%],thrData[i%]);
+                next
+                ChanShow(thrChan%);
+                ChanColour(thrChan%,1,16);
+                DrawMode(thrChan%,1,10);
+                ChanOrder(VmChan%,-1,thrChan%);
+                ChanOrder(thrChan%,0,VmChan%);
+                YAxisLock(thrChan%,1);
+                Optimise(-1);
+                
+            endif
+            
+        endif
+        ChanDelete(tempChan%,0);
+    endif
+end

@@ -1,0 +1,166 @@
+'utils_rescaleForce.s2s
+'Marin Manuel - March 2011
+'
+'This script is used on a file in which the gain of the force recording has
+'been changed several time. In that case the scale of the YAxis is only
+'relevant to the last change of gain, and not to any previous. The script 
+'iterates over the file, and looks in the TextMarks when the gain has changed. 
+'It then scales the axis to the right value, and copies the waveform with the
+'right scaling to a realmark channel.
+
+
+#include "includes/incl_forceTransducerFunctions.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+var startTime,endTime;
+var startRange,endRange;
+var curPos;
+var ok%;
+var scaledForceChan%;
+
+DlgCreate("Rescale Force Tool");
+DlgChan(1,"Force Channel", 0x1+0x10+0x200);
+DlgXValue(2,"Start analysis at");
+DlgXValue(3,"  End analysis at");
+ok% := DlgShow(forceChan%,startTime,endTime);
+if ok% then
+    scaledForceChan% := MemChan(9,0,BinSize(forceChan%));
+    if scaledForceChan% > 0 then
+    else
+        Message("ERROR: could not create a new memory channel, aborting");
+        halt;
+    endif
+    ChanOffset(scaledForceChan%,0.0);
+    ChanScale(scaledForceChan%,1.0);
+    ChanTitle$(scaledForceChan%,ChanTitle$(forceChan%));
+    ChanUnits$(scaledForceChan%,ChanUnits$(forceChan%));
+    
+    var nextGain%;
+    var curGain%;
+    curPos := NextTimeChangeGain(notesChan%,startTime-BinSize(forceChan%),nextGain%);
+    if curPos < 0 then
+        Message("ERROR:could not find any change of gain in the range provide, aborting");
+        halt;
+    endif
+    'this code is to handle what happens with what's inbetween startTime and curPos,
+    'TODO later
+'    endRange := curPos;
+'    curPos := LastTimeChangeGain(paramChan%,endRange,prevGain%);
+'    if curPos < 0 then
+'        'no previous gain, ask user
+'        'fist, construct list of possible gains
+'        var selectedGainInList%;
+'        var gainListStr$ := "";
+'        var i% := 0;
+'        for i% := 0 to NBGAINAVAILABLE%-1 do
+'            gainListStr$ += Str$(forceGains[i%]+"|");
+'        next
+'        'the creae dialog
+'        DlgCreate("input gain information");
+'        DlgText(Print$("WARNING: no gain found for times before %.2fs",endRange),0,0);
+'        DlgText(Print$("Enter gain below of press Cancel to ignore range and start at %.2fs",endRange),0,0);
+'        DlgList(1,"Gain x",gainListStr$);
+'        ok% := DlgShow(selectedGainInList%);
+'        if ok% then
+'            startRange := startTime;
+'            endRange;
+'            nextGain% := prevGain%;
+'        else
+'            startRange := endRange;
+'    else
+'        startRange := curPos;
+    '    endif
+    while curPos > 0 and curPos <= endTime do
+        startRange := curPos;
+        curGain% := nextGain%;
+        endRange := NextTimeChangeGain(notesChan%,startRange,nextGain%);
+        if endRange < 0 or endRange > endTime then
+            endRange := endTime;
+        endif
+        
+        var gainId%;
+        gainId% := ArrHasFloat%(forceGains[],curGain%);
+        if gainId% < 0 then
+            Message("WARNING: Cannot parse gain, ignoring...");
+        else
+            'restore axis scaling
+            ChanScale(forceChan%,forceChanGains[gainId%]);
+            'copy data to mem chan
+            copyData(forceChan%,scaledForceChan%,startRange,endRange);
+        endif
+        curPos := NextTimeChangeGain(notesChan%,endRange-BinSize(forceChan%),nextGain%);
+    wend
+    Optimise(scaledForceChan%);
+    ChanShow(scaledForceChan%);
+endif
+
+func NextTimeChangeGain(chan%,time,&gain%)
+    var tempTime;
+    var tempString$;
+    var dummy%[4];
+    var returnTime := -1;
+    var searchOver% := 0;
+    var posGainStr% := 1;
+    var gainStr$;
+    gain% := -1;
+    
+    tempTime := time;
+    repeat
+        tempTime := NextTime(chan%,tempTime,dummy%[],tempString$);
+        posGainStr% := InStr(tempString$,GAINCHANGEDSTRING$,1);
+        if tempTime<0 then
+            searchOver% := 1;
+        endif
+    until searchOver% or (tempTime>0 and posGainStr%>0);
+    if tempTime>0 then
+        returnTime := tempTime;
+        gainStr$ := Mid$(tempString$,Len(GAINCHANGEDSTRING$)+1);
+        gain% := Val(gainStr$);
+    endif
+    return returnTime;
+end      
+
+func LastTimeChangeGain(chan%,time,&gain%)
+    var tempTime;
+    var tempString$;
+    var dummy%[4];
+    var returnTime := -1;
+    var searchOver% := 0;
+    var posGainStr% := 1;
+    var gainStr$;
+    gain% := -1;
+    
+    tempTime := time;
+    repeat
+        tempTime := LastTime(chan%,tempTime,dummy%[],tempString$);
+        posGainStr% := InStr(tempString$,GAINCHANGEDSTRING$,1);
+        if tempTime<0 then
+            searchOver% := 1;
+        endif
+    until searchOver% or (tempTime>0 and posGainStr%>0);
+    if tempTime>0 then
+        returnTime := tempTime;
+        gainStr$ := Mid$(tempString$,Len(GAINCHANGEDSTRING$)+1);
+        gain% := Val(gainStr$);
+    endif
+    return returnTime;
+end    
+
+proc copyData(fromChan%, toChan%, startPos, endPos)
+    var tempBuffer[bufferSize%];
+    var tempPos;
+    var nbPoints%;
+    tempPos := startPos;
+    repeat
+        nbPoints% := ChanData(fromChan%,tempBuffer[],tempPos,endPos,tempPos);
+        if nbPoints%>0 then
+            ChanWriteWave(toChan%,tempBuffer[:nbPoints%],tempPos);
+            tempPos := tempPos + nbPoints%*BinSize(fromChan%);
+        endif
+    until nbPoints% <= 0;
+end

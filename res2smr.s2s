@@ -1,0 +1,87 @@
+'---Script to put data from result file into a Spike2 data file-----
+
+var resFile%;														' Result view to convert
+var smrFile%;														' Handle of new .smr file
+var sTime,eTime;													' start and end time 
+
+resFile% := view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+ToolbarSet(1,"Quit");
+ToolbarSet(3,"Load File",Load%);
+ToolbarSet(4,"Convert",Convert%);
+Toolbar("Convert result to data file",1023);
+
+Func Load%()
+var ok%;
+if resFile% >0 then												' If a result file already loaded
+	View(resFile%);												' Close it
+	FileClose();
+	resFile%:=0;
+endif;
+resFile%:=FileOpen("",4,0);									' Open result file
+if resFile% < 0 then												' If user pressed cancel allow to retry or quit script
+	ok%:=Query("Failed to open file","Retry","Quit");
+	if ok% then Load%();
+	else Halt;
+	endif;
+endif;
+Window(0,0,100,100);												' Position window full screen
+sTime:=BinToX(0);													' Get start and end time of data
+eTime:=BinToX(MaxTime());
+XRange(sTime,eTime);												' Show full range
+Optimise(0);														' Optimise data
+FrontView(resFile%);												' Bring to front
+return 1;
+end;
+
+
+Func Convert%()
+var maxIndex%,minIndex%;										' array indexes of maximum and minimum points
+var maxLev,minLev,mid;											' Maximum, minimum and mid points for scaling purposes
+var scale;															' scale factor
+var tempChan%;														' Memory channel to import data
+var num%;															' Number of bins in result view	
+var bSize;															' bin size
+var tTime;															' Length of result view
+var chans%, chi%, chan%;   									' Number of channels & channel counter
+var cl%[200];														' An array to hold actual channel numbers
+
+View(resFile%);
+tTime:=eTime-sTime;												' Total time range
+chans% := ChanList(cl%[], 1+16384);							' Get actual channel count, not duplicates
+smrFile%:=FileNew(7,0,2,2,tTime);							' Create new smr file
+bSize:=View(resFile%).BinSize();								' Get bin size - same for all channels
+for chi% := 1 to chans% do
+   chan% := cl%[chi%];											' Get the actual channel number
+	if (chan% <= 100) then										' Only convert if it is a disk channel
+		maxIndex% := Max(View(resFile%, chan%).[]);		' Get indexes of max and min levels	
+		minIndex% := Min(View(resFile%, chan%).[]);							
+		maxLev := View(resFile%, chan%).[maxIndex%];		' Get max and min levels	
+		minLev := View(resFile%, chan%).[minIndex%];
+		mid := minLev + ((maxLev-minLev)/2);				' Get mid point
+		scale := (maxLev-minLev)/10;							' Calculate scale factor for waveform channel
+		num%:=View(resFile%).MaxTime();
+		tempChan%:=MemChan(1,0,bSize);						' Set memory channel 
+		ChanScale(tempChan%,scale);							' Set scale and offset to fit result data
+		ChanOffset(tempChan%,mid);
+		MemSetItem(tempChan%,0,0,View(resFile%, chan%).[]);' Add data to memory channel	
+		MemSave(tempChan%,chan%);								' Save to permanent channel	
+		ChanDelete(tempChan%,0);								' Delete original channel	
+		ChanShow(chan%);											' Show channel
+		Optimise(chan%);											' Optimise
+	endif
+next																	' On to the next channel
+View(resFile%).Window(50,0,100,100);						' Position 2 files for comparison
+View(smrFile%).Window(0,0,50,100);
+FrontView(smrFile%);												' Make the new data file visible
+XRange(0,MaxTime());
+Optimise(-1);
+return 1;
+end;
+
+
+

@@ -1,0 +1,348 @@
+'#### analysis_IFcurve_pulse.s2s
+'#### Marin Manuel
+'# this script performs an off-line analysis on a Current Clamp pulses data
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_IFcurve.s2s"
+#include "includes/incl_forceFunctions.s2s"
+
+
+var dataHdl%,ifHdl%,forceFreqHdl%,forceCurrentHdl%;
+var currentFolder$;
+var dataFileName$;
+
+var startTime:=0.0,endTime;
+var doCreateFreqChan%;
+var doFilterPulses%:=1;
+var doPlotStatFreq%:=1;
+var statFreqPercent%:=75;
+var ISIind%:=1;
+var doForceFreqCurve% := 0;
+var doForceCurrentCurve% := 0;
+var doMeanIFCurve% := 0;
+
+const nbSlices% := 4;
+const tolerance := 0.05; '5%
+const DEFAULTVIEWMARGINS := 0.10; 'view will be pulse +/- DEFAULTVIEWMARGINS
+
+var ok%,dummy%;
+
+var pulseChan%;
+var pulseDuration := 0.5; 's
+
+dataHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+FrontView(dataHdl%);
+
+if ViewKind(dataHdl%)=0 then 'works on data file
+    'initialize variables
+    currentFolder$:=FileName$(1)+FileName$(2);
+    dataFileName$:=FileName$(3)+FileName$(4);
+    endTime:=MaxTime();
+    
+    DlgCreate("IF curve parameters");
+    DlgAllow(0,0,chgFunc%);
+    DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
+    DlgChan(3,"Inst. freq. Channel", 0x2+0x8+0x10+0x20+0x40);
+    DlgCheck(4, "Create frequency channel?");
+    DlgChan(5, "ComOut Channel", 0x2+0x4+0x8+0x20); '#FIXME
+    DlgCheck(6, "Filter pulses for change in current amplitude");
+    DlgReal(7,"Pulse duration (s)",0,100,0,0,0.5);
+    DlgXValue(8,"Start analysis at");
+    DlgXValue(9,"  End analysis at");
+    DlgLabel(10,"");
+    DlgCheck(11,"Plot stationary frequency");
+    DlgInteger(12,"Time period from end of pulse (%)",0,100,0,0,5);
+    DlgInteger(13,"Plot ISI n°",1,100,0,0,1);
+    DlgCheck(14,"Plot Force-Freq curve");
+    DlgCheck(15,"Plot Force-Current curve");
+    DlgChan(16,"Force channel",1+512+2048);
+    DlgCheck(17, "Plot Mean +/- SD IF curve");
+    ok%:=DlgShow(VmChan%,ImChan%,freqChan%,doCreateFreqChan%,comOutChan%,doFilterPulses%,pulseDuration,
+    startTime,endTime,dummy%,doPlotStatFreq%,statFreqPercent%,ISIind%,
+    doForceFreqCurve%, doForceCurrentCurve%, forceChan%, doMeanIFCurve%);
+    if ok% then
+        if doCreateFreqChan% then
+            freqChan%:=createFreqChan%(VmChan%,startTime,endTime);
+            if freqChan%<=0 then
+                Message("Error: cannot create Frequency Channel");
+                halt
+            endif
+        endif
+        'make sure the freq channel is drawn as Inst Freq
+        DrawMode(freqChan%,7,4);
+        Optimise(freqChan%);
+        ChanShow(freqChan%);
+        
+        'create a level channel containing only the pulses to be taken into consideration for this analysis
+        comOutChan% := filterPulsecomOutChan%(comOutChan%, startTime, endTime, doFilterPulses%);
+        
+        XRange(startTime,endTime);
+        Optimise(-1);
+        
+        var tempCur%;
+        tempCur%:=CursorNew();
+        if tempCur%<=0 then
+            Message("Error: No more available cursor,\nplease delete a cursor and try again");
+            halt;
+        endif
+        
+        pulseChan% := MemChan(5);
+        MemImport(pulseChan%,comOutChan%, startTime, endTime);
+        if pulseChan%>0 then
+            if doPlotStatFreq% then
+                'plot stationnary frequency
+                'we need to iterate over the end of each pulse. let's create a memory chan with the end of pulses events
+                MarkMask(pulseChan%,-1,1,-1);'filter all markers
+                MarkMask(pulseChan%,0,-1,-1);
+                MarkMask(pulseChan%,0,1,0);  'except 00
+                
+                CursorLabel(4,tempCur%,"avg >");
+                CursorLabel(4,0,"< avg");
+                
+                CursorActive(tempCur%,16,0,Print$("Cursor(0)-%f",pulseDuration*(statFreqPercent%/100.0)));
+                ifHdl%:=MeasureToXY(14,pulseChan%,0);
+                if ifHdl%>0 then
+                    MeasureX(101,ImChan%,Print$("Cursor(0)-%f",pulseDuration/2.0),Print$("Cursor(0)+%f",pulseDuration/2.0),pulseDuration);
+                    MeasureY(2,freqChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
+                    MeasureChan(1,Print$("avg %s",view(dataHdl%).ChanTitle$(freqChan%)),0);
+                endif
+                
+                view(dataHdl%);
+                
+                if doForceFreqCurve% then
+                    forceFreqHdl%:=MeasureToXY(14,pulseChan%,0);
+                    if forceFreqHdl%>0 then
+                        MeasureX(2,freqChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
+                        MeasureY(2,forceChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
+                        MeasureChan(1,"avg force",0);
+                    endif
+                endif
+                
+                if doForceCurrentCurve% then
+                    forceCurrentHdl%:=MeasureToXY(14,pulseChan%,0);
+                    if forceCurrentHdl%>0 then
+                        MeasureX(101,ImChan%,Print$("Cursor(0)-%f",pulseDuration/2.0),Print$("Cursor(0)+%f",pulseDuration/2.0),pulseDuration);
+                        MeasureY(2,forceChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
+                        MeasureChan(1,Print$("avg %s",view(dataHdl%).ChanTitle$(forceChan%)),0);
+                    endif
+                endif
+                
+                
+                view(dataHdl%);
+            else
+                'plot a particular ISI
+                'we iterate over the start of each pulse
+                MarkMask(pulseChan%,-1,1,-1);'filter all markers
+                MarkMask(pulseChan%,0,-1,-1);
+                MarkMask(pulseChan%,0,1,1);  'except 01
+                
+                CursorLabel(4,tempCur%,"ISI ^");
+                CursorLabel(4,0,"");
+                
+                CursorActive(tempCur%,14,freqChan%,"Cursor(0)",Print$("Cursor(0)+%f",pulseDuration),"Cursor(0)",1+ISIind%); 'we move to the correct ISIind% +1 because we dont consider the first spike
+                ifHdl%:=MeasureToXY(14,pulseChan%,0,1,0,2);
+                if ifHdl%>0 then
+                    MeasureX(101,ImChan%,Print$("Cursor(0)+%f",pulseDuration/2.0),Print$("Cursor(0)-%f",pulseDuration/2.0),pulseDuration);
+                    MeasureY(100,freqChan%,Print$("Cursor(%d)",tempCur%));
+                    MeasureChan(1,Print$("ISI %d",ISIind%),0);
+                endif
+            endif
+            view(dataHdl%);
+            
+        else
+            Message("Error: cannot create a new memory channel");
+            halt
+        endif
+        
+        '
+        'organize the windows
+        '
+        
+        'reset the display of the data file
+        XRange(startTime, endTime);
+        
+        var nbResultViews% := 0;
+        var currentResultView%;
+        if ifHdl% > 0 then
+            nbResultViews% += 1;
+        endif
+        if forceFreqHdl%>0 then
+            nbResultViews% += 1;
+        endif
+        if forceCurrentHdl%>0 then
+            nbResultViews% += 1;
+        endif
+        
+        
+        
+        if ifHdl% > 0 then
+            currentResultView% += 1;
+            view(ifHdl%);
+            XYKey(1,1); 'show the key
+            XYJoin(-1,0); 'disconnect the points
+            placeResults(dataHdl%,ifHdl%,currentResultView%,nbResultViews%);
+        endif
+        
+        if forceFreqHdl%>0 then
+            currentResultView% += 1;
+            view(forceFreqHdl%);
+            XYKey(1,1); 'show the key
+            XYJoin(-1,0); 'disconnect the points
+            placeResults(dataHdl%,forceFreqHdl%,currentResultView%,nbResultViews%);
+        endif
+        
+        if forceCurrentHdl%>0 then
+            currentResultView% += 1;
+            view(forceCurrentHdl%);
+            XYKey(1,1); 'show the key
+            XYJoin(-1,0); 'disconnect the points
+            placeResults(dataHdl%,forceCurrentHdl%,currentResultView%,nbResultViews%);
+        endif
+        
+        FrontView(dataHdl%);
+        
+        'perform the analysis
+        view(dataHdl%).ProcessAll(startTime, endTime);
+        view(dataHdl%);
+        
+        'reset the label for future use
+        CursorLabel(2,tempCur%);
+        CursorLabel(2,0);
+        
+        CursorDelete(tempCur%);
+        CursorVisible(0,0);
+        
+        if forceFreqHdl%>0 then
+            view(forceFreqHdl%).ChanFit(1,5,1);
+            view(forceFreqHdl%).ChanFit(1,1+2,XLow(),XHigh());
+            var tff,maxForce,fracFreq,fracForce;
+            getForceValuesOnForceFreqCurve(forceFreqHdl%,0.90,maxForce,tff,fracForce,fracFreq);
+        endif
+        
+        if ifHdl%>0 and doMeanIFCurve% then
+            makeMeanIFCurve(ifHdl%, 1, 0.01);
+        endif
+    endif
+endif
+
+func chgFunc%(item%)
+    var result%:=1;
+    var dummy%[1];
+    var nbChans%;
+    nbChans%:=ChanList(dummy%[], 2+8+16+32+64+2048);
+    docase
+    case item%=0 then 'first run
+        if nbChans%>0 then
+            DlgValue(4,0);  'UnCheck the "Create frequency channel?" check box
+            DlgEnable(1,3);
+        else
+            DlgValue(4,1);  '  Check the "Create frequency channel?" check box
+            DlgEnable(0,3);
+        endif
+        
+        DlgEnable((DlgValue(11)) mod 2, 12); 'box 11 enabled when checkbox 10 checked and vice-versa
+        DlgEnable((DlgValue(11)+1) mod 2, 13);
+        chgFunc%(14);
+        chgFunc%(15);
+    case item%=4 then
+        if nbChans%>0 then
+            'alternate enabled state of Chan Select boxes
+            DlgEnable((DlgEnable(3)+1) mod 2,3);
+        else
+            result%:=0;
+        endif
+    case item%=11 then
+        DlgEnable((DlgValue(11)) mod 2, 12); 'box 11 enabled when checkbox 10 checked and vice-versa
+        DlgEnable((DlgValue(11)+1) mod 2, 13);
+    case item%=14 then
+        DlgEnable(DlgValue(14),16);
+    case item%=15 then
+        DlgEnable(DlgValue(15),16);
+    endcase
+    return result%;
+end
+
+func filterPulsecomOutChan%(comOutChan%, startT, endT, doFilter%)
+    var tempChan%;
+    var equal%;
+    var meanVal;
+    var stepSize;
+    var pos;
+    var testVal;
+    var diff;
+    var autoAccept% := 0;
+    
+    tempChan% := MemChan(4);
+    if tempChan%<0 then
+        Message("ERROR: could not create memory channel:\n"+Error$(tempChan%));
+        return -1;
+    endif
+    
+    MemImport(tempChan%,comOutChan%,startT,endT);
+    ChanTitle$(tempChan%,ChanTitle$(comOutChan%));
+    
+    var pulseStart, pulseStop, pulseDir;
+    pulseStart := startT;
+    pulseStop  := startT;
+    pulseStart := NextTime(tempChan%,pulseStop,pulseDir);
+    pulseStop := NextTime(tempChan%,pulseStart);
+    while pulseStart>0 and pulseStop>0 and pulseStart<endT do
+        if pulseDir=0 and pulseStart>0 then 'low to high
+            pulseDuration := pulseStop-pulseStart;
+            equal% := 1;
+            if doFilter% then
+                meanVal := ChanMeasure(ImChan%,2,pulseStart,pulseStop);
+                stepSize := (1.0/nbSlices%)*pulseDuration;
+                for pos:=pulseStart to pulseStop-stepSize step stepSize do 
+                    testVal := ChanMeasure(ImChan%,2,pos,pos+stepSize);
+                    diff := abs(meanVal-testVal);
+                    if diff>tolerance then
+                        equal% := 0;
+                    endif
+                next
+                if not equal% then
+                    'delete the pulse from the event channel
+                    MemDeleteTime(tempChan%,3,pulseStart-BinSize(),pulseStop+BinSize());
+                endif
+            endif
+            if equal% and not autoAccept% then
+                'the pulse has not been rejected by the automatic filtering system
+                'and the user has not chosen to 'Accept All', so ask to validate the current pulse
+                var viewMargin;
+                viewMargin := pulseDuration*DEFAULTVIEWMARGINS;
+                XRange(pulseStart-viewMargin,pulseStop+viewMargin);
+                DlgCreate("Validate current pulse");
+                DlgText("Include this pulse in the analysis?",1,1);
+                DlgButton(0,"Cancel");
+                DlgButton(1,"Yes");
+                DlgButton(2,"Yes to ALL");
+                DlgButton(3,"No");
+                ok% := DlgShow();
+                docase
+                case ok%=0 then 'user clicked cancel
+                    ChanDelete(tempChan%,0);
+                    return -2;
+                    
+                case ok%=1 then 'user clicked YES
+                    'do nothing, just move to the next pulse
+                    
+                case ok%=2 then 'user clicked YES TO ALL
+                    autoAccept% := 1;
+                    
+                case ok%=3 then 'user clicked NO
+                    MemDeleteTime(tempChan%,3,pulseStart-BinSize(),pulseStop+BinSize());
+                    
+                endcase
+            endif
+        endif
+        
+        pulseStart := NextTime(tempChan%,pulseStop,pulseDir);
+        pulseStop := NextTime(tempChan%,pulseStart);
+    wend
+    return tempChan%;
+end

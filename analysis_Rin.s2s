@@ -1,0 +1,378 @@
+'#### analysis_Rin.s2s
+'#### Marin Manuel
+'#
+'# Analyze long substhreshold current pulses to calculate input resistance
+'# and auto-average pulses.
+'# This script can be used with any type of pulses, it does not need to know
+'# how many pulses there are and how their amplitude change. Instead, it
+'# will sort pulses according to their amplitude. To be tolerant to noise,
+'# a threshold is definied (typically 10%) according to which amplitudes
+'# are discimined
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_globalVariables.s2s"
+#include "includes/incl_IVcurve.s2s"
+#include "includes/incl_utilFunctions.s2s"
+#include "includes/incl_mathFunctions.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+'## views
+dataFileHdl% := view(); 'the data file (declared in incl_globalVariables.s2s)
+var tempAvgHdl%; 'the result view to do the averages
+var avgHdl%; 'the result view to show the averages in
+var ivHdl%; 'the xy view to plot the IV curve
+var theFileName$;
+
+if ViewKind()<>0 then
+    Message("Error: script must be used on a time view");
+    halt
+endif
+
+
+'## Channels
+var pulseStartChan%; 'this is a memory chan to hold the start of each pulse
+var markChan%; 'this is a marker chan, each pulse of a given amplitude have 
+'the same marker code
+var peakXYChan% := 1;
+var platXYChan% := 2;
+
+'## Global variables
+var nbPulses%; 'this will hold the number of different pulses used
+var pulseArr[100][5]; 'this 2D array holds:
+'[...][0] - the amplitude of the pulse
+'[...][1] - the marker code associated with this amplitude
+'[...][2] - the result channel for the voltage
+'[...][3] - the result channel for the current
+'[...][4] - the number of sweeps
+var startTime, endTime; 'start and stop time of processing
+startTime := XLow();
+endTime := XHigh();
+comOutChan% := 803; 'default to ComOut
+var avgLength, avgOffset; 'parameters for the averaging
+avgLength := 0.7;
+avgOffset := 0.1;
+var smoothTimeCst := 0.01; '(s) smooting process time constant
+var downSampleFreq := 2e3; '(Hz) Final frequency after downsampling
+var useCustomMarkChan% := 0;
+var doSmooth% := 0;
+var doDownSample% := 0;
+var doFilterSpikes% := 1;
+var currentTolerance := 0.1;
+var doForceZeroIntercept% := 1;
+
+
+'## Dialog Box variables
+var VmChanItem% := 1;
+var ImChanItem% := 2;
+var lvlChanItem% := 3;
+var startTimeItem% := 4;
+var endTimeItem% := 5;
+var avgLengthItem% := 7;
+var avgOffsetItem% := 8;
+var doSmoothItem% := 10;
+var smoothTimeCstItem% := 11;
+var doDownSampleItem% := 12;
+var downSampleFreqItem% := 13;
+var doFilterSpikesItem% := 14;
+var currentToleranceItem% := 15;
+var doForceZeroInterceptItem% := 16;
+
+var dummy;
+var ok%;
+
+main();
+
+
+
+
+
+
+proc main()
+    DlgCreate("Parameters of Gin measurements");
+    DlgChan(VmChanItem%, "Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(ImChanItem%, "Injected Current Channel", 0x1+0x10+0x200);
+    DlgChan(lvlChanItem%, "ComOut Channel", 0x2+0x4+0x8+0x20);
+    DlgXValue(startTimeItem%, "Start analysis at");
+    DlgXValue(endTimeItem%,   "  End analysis at");
+    DlgReal(avgLengthItem%, "Average duration (s)", 0, inf, 0, 0, 10e-3);
+    DlgReal(avgOffsetItem%, "Pre-trigger offset (s)", 0, inf, 0, 0, 5e-3);
+    DlgCheck(doSmoothItem%, "Smooth before averaging?");
+    DlgReal(smoothTimeCstItem%, "Time constant (s)", 0, inf, 0, 0, 1e-3);
+    DlgCheck(doDownSampleItem%, "Downsample before averaging?");
+    DlgReal(downSampleFreqItem%, "Frequency (Hz)", 0, inf, 0, 0,1e3);
+    DlgCheck(doFilterSpikesItem%, "Remove pulses with spikes");
+    DlgReal(currentToleranceItem%, "Tolerance for current intensity (nA)", 0, inf, 0, 0, 0.1);
+    DlgCheck(doForceZeroInterceptItem%, "Linear fit crosses at zero");
+    DlgAllow(0,0,dlgChange%);
+    ok% := DlgShow(VmChan%, ImChan%, comOutChan%, startTime, endTime, dummy, avgLength, avgOffset, 
+    dummy, doSmooth%, smoothTimeCst, doDownSample%, downSampleFreq, doFilterSpikes%,
+    currentTolerance, doForceZeroIntercept%);
+    if ok% then
+        theFileName$ := FileName$(3)+FileName$(4);
+        
+        var pulseChan%;
+        if ChanKind(comOutChan%)<>4 then
+            pulseChan% := MemChan(4, 0);
+            MemImport(pulseChan%, comOutChan%, startTime, endTime);
+            comOutChan% := pulseChan%;
+        endif
+        
+        if ChanKind(comOutChan%)=4 then
+            'create event chan with start of all the pulses
+            pulseStartChan% := MemChan(5);
+            if pulseStartChan%<0 then
+                Message("Error: cannot create a memory channel");
+                return
+            endif
+            MemImport(pulseStartChan%, comOutChan%, startTime, endTime);
+            'filter to keep only the begining of each pulse (code 01)
+            MarkMask(pulseStartChan%, 0);                  'set mode 0
+            MarkMask(pulseStartChan%,-1, 1,-1);            'include everything (reset)
+            MarkMask(pulseStartChan%, 0, 0, -1);           'exclude everything in layer 0
+            MarkMask(pulseStartChan%, 0, 1, 01);           'include the codes we want
+        else
+            pulseStartChan% := comOutChan%
+        endif
+        
+        'create a XY view to plot the IV curve
+        ivHdl% := FileNew(12);
+        if ivHdl%<0 then
+            Message("Error: cannot create XY view\nthe IV plot will not be generated");
+        else
+            platXYChan% := XYSetChan(0); 'add new channel for plateau value
+        endif
+        view(dataFileHdl%);
+        
+        'create a marker channel with marker codes for different intensities
+        markChan% := MemChan(5);
+        if markChan%<0 then
+            Message("Error: cannot create a marker channel");
+            return
+        endif
+        
+        'loop through all the pulses
+        var pulseStartTime;
+        var pulseEndTime;
+        var measureResult%;
+        var dI, dVPeak, dVPlat;
+        var marker%;
+        var codes%[4];
+        
+        pulseStartTime := NextTime(pulseStartChan%, startTime);
+        while pulseStartTime>0 and pulseStartTime<endTime do
+            pulseEndTime := NextTime(comOutChan%, pulseStartTime);
+            
+            measureResult% := measurePulse%(VmChan%, ImChan%, pulseStartTime, pulseEndTime, doFilterSpikes%, dI, dVPeak, dVPlat);
+            if measureResult%>0 then
+                'add data to IV curve
+                if ivHdl%>0 then
+                    view(ivHdl%).XYAddData(peakXYChan%,dI,dVPeak);
+                    view(ivHdl%).XYAddData(platXYChan%,dI,dVPlat); 
+                endif
+                
+                
+                
+                'check if we already encountered a pulse of this intensity
+                if nbPulses%>0 then
+                    var ind%;
+                    ind% := ArrHasFloatFuzzy%(pulseArr[:nbPulses%][0], dI, currentTolerance);
+                    if ind%>=0 then 'yes we have, get the corresponding marker
+                        marker% := pulseArr[ind%][1];
+                    else 'new pulse intensity
+                        var markerMax%, chanMax%;
+                        var markerMaxInd%, chanMaxInd%;
+                        markerMaxInd% := max(pulseArr[:(nbPulses%)][1]); 'get the highest marker currently in use
+                        chanMaxInd% := max(pulseArr[:(nbPulses%)][3]); 'get the highest channel currently in use
+                        markerMax% := pulseArr[markerMaxInd%][1];
+                        chanMax% := pulseArr[chanMaxInd%][3];
+                        
+                        marker% := markerMax%+1;
+                        'fill the array
+                        nbPulses%+=1;
+                        pulseArr[nbPulses%-1][0] := dI;
+                        pulseArr[nbPulses%-1][1] := marker%;
+                        pulseArr[nbPulses%-1][2] := chanMax%+1;
+                        pulseArr[nbPulses%-1][3] := chanMax%+2;
+                    endif
+                else 'first pulse *ever*
+                    marker% := 0;
+                    'fill the array
+                    nbPulses%+=1;
+                    pulseArr[nbPulses%-1][0] := dI;
+                    pulseArr[nbPulses%-1][1] := marker%;
+                    pulseArr[nbPulses%-1][2] := 1;
+                    pulseArr[nbPulses%-1][3] := 2;
+                endif
+                
+                'place marker event                    
+                ArrConst(codes%[],0);
+                codes%[0] := marker%;
+                MemSetItem(markChan%,0,pulseStartTime,codes%[]);
+            endif
+            
+            pulseStartTime := NextTime(pulseStartChan%, pulseStartTime);
+        wend
+        'prettify IV curve
+        if ivHdl%>0 then
+            prettifyGinIVCurve(ivHdl%, ChanUnits$(ImChan%), ChanTitle$(ImChan%), ChanUnits$(VmChan%));
+            
+            var N% := view(ivHdl%).XYCount(1);
+            var Xpeak[N%],Ypeak[N%],Xplat[N%],Yplat[N%];
+            view(ivHdl%).XYGetData(peakXYChan%, Xpeak[], Ypeak[]);
+            view(ivHdl%).XYGetData(platXYChan%, Xplat[], Yplat[]);
+            
+            var Rpeak, Rplat, bpeak, bplat;
+            linregress(Xpeak,Ypeak, Rpeak, bpeak, doForceZeroIntercept%=1?0:1);
+            linregress(Xplat,Yplat, Rplat, bplat, doForceZeroIntercept%=1?0:1);
+            
+            var fitPeakChan%, fitPlatChan%, xmin, xmax, x[2],y[2];
+            fitPeakChan% := view(ivHdl%).XYSetChan(0,2,0,1);
+            fitPlatChan% := view(ivHdl%).XYSetChan(0,2,0,1);
+            xmin := view(ivHdl%).XLow();
+            xmax := view(ivHdl%).XHigh();
+            x[0] := xmin;
+            x[1] := xmax;
+            ArrConst(y[],x[]);
+            ArrMul(y[],Rpeak);
+            ArrAdd(y[],bpeak);
+            view(ivHdl%).XYAddData(fitPeakChan%, x,y);
+            ArrConst(y[],x[]);
+            ArrMul(y[],Rplat);
+            ArrAdd(y[],bplat);
+            view(ivHdl%).XYAddData(fitPlatChan%, x,y);
+            
+            prettifyGinIVCurve(ivHdl%, ChanUnits$(ImChan%), ChanTitle$(ImChan%), ChanUnits$(VmChan%));
+            nbResultFiles% += 1;
+            resultFiles%[nbResultFiles%-1] := ivHdl%;
+        endif
+        
+        
+        if BinSize(VmChan%)<>BinSize(ImChan%) then
+            Message(Print$("Error: cannot average channel %d along with channel %d as they do not have the same sampling rate",VmChan%, ImChan%));
+        else
+            'apply smoothing and downsampling if requested
+            if doSmooth% then
+                ChanProcessAdd(VmChan%, 1, smoothTimeCst);
+                ChanProcessAdd(ImChan%, 1, smoothTimeCst);
+            endif
+            if doDownSample% then
+                var nbSkipPoints%;
+                nbSkipPoints% := Ceil((1/BinSize(VmChan%))/downSampleFreq);
+                ChanProcessAdd(VmChan%, 5, nbSkipPoints%);
+                ChanProcessAdd(ImChan%, 5, nbSkipPoints%);
+            endif
+            
+            'create a avg window
+            tempAvgHdl% := SetAverage(Print$("%d,%d",VmChan%,ImChan%), avgLength/BinSize(VmChan%), avgOffset, markChan%, 1+4, 3);
+            view(dataFileHdl%);
+            
+            'create a result view to hold the averages, with 2*nbPulses% channels, because we need 1 for Vm and 1 for Im for each pulse
+            avgHdl% := SetResult((2*nbPulses%), avgLength/BinSize(VmChan%), BinSize(VmChan%), -avgOffset, "Pulse Averages", XUnits$(), "", XTitle$(), "", 1+4);
+            view(dataFileHdl%);
+            
+            if tempAvgHdl%>0 and avgHdl%>0 then
+                
+                
+                'for each marker, get an average and transfer to the final window
+                var i%;
+                for i% := 0 to nbPulses%-1 do
+                    marker% := pulseArr[i%][1];
+                    
+                    'filter marker channel to show only the current marker
+                    MarkMask(markChan%, 0);                  'set mode 0
+                    MarkMask(markChan%,-1, 1,-1);            'include everything (reset)
+                    MarkMask(markChan%, 0, 0, -1);           'exclude everything in layer 0
+                    MarkMask(markChan%, 0, 1, marker%);           'include the codes we want
+                    
+                    'do the average
+                    view(tempAvgHdl%).Process(startTime, endTime, 1);
+                    
+                    'transfer the average to the final window
+                    'Sweeps
+                    view(avgHdl%).Sweeps(view(tempAvgHdl%).Sweeps());
+                    'mean
+                    ArrConst(view(avgHdl%, pulseArr[i%][2]).[], view(tempAvgHdl%, 1).[]); 'Vm
+                    ArrConst(view(avgHdl%, pulseArr[i%][3]).[], view(tempAvgHdl%, 2).[]); 'Im
+                    'SD
+                    var nbBins%;
+                    nbBins% := Len(view(tempAvgHdl%, 1).[]);
+                    var sd[nbBins%];
+                    view(tempAvgHdl%).BinError(1, 0, sd[]);
+                    view(avgHdl%).BinError(pulseArr[i%][2], 0, sd[], 1);
+                    view(tempAvgHdl%).BinError(2, 0, sd[]);
+                    view(avgHdl%).BinError(pulseArr[i%][3], 0, sd[], 1);
+                next
+                
+                'delete the temp avg window
+                view(tempAvgHdl%); FileClose(0,-1);
+                view(dataFileHdl%);
+                
+                'delete temp channels
+                ChanDelete(pulseStartChan%);
+                ChanDelete(markChan%);
+                
+                'prettify
+                prettifyPulseAvg(avgHdl%, XUnits$(), XTitle$(), ChanUnits$(VmChan%), ChanTitle$(VmChan%), ChanUnits$(ImChan%), ChanTitle$(ImChan%));
+                view(avgHdl%).collapseChans(pulseArr[:nbPulses%][2]);
+                view(avgHdl%).collapseChans(pulseArr[:nbPulses%][3]);
+                if not (doSmooth% or doDownSample%) then
+                    'if we're showing the raw data, hide the error bars so that things are a little easier to see
+                    view(avgHdl%).DrawMode(-1, 2, 0, 0);
+                    view(avgHdl%).Optimise(-1);
+                endif
+                nbResultFiles% += 1;
+                resultFiles%[nbResultFiles%-1] := avgHdl%;
+                
+                'measure RMP as avg of all traces before the pulse
+                var rmp := 0;
+                for i%:=0 to nbPulses%-1 do
+                    rmp += view(avgHdl%).ChanMeasure(pulseArr[i%][2], 2, BinToX(0), 0.0);
+                next
+                rmp /= nbPulses%;
+                
+            else
+                Message("Error: Cannot create a new result view. Averages will not be available");
+            endif
+            
+            'cleanup
+            if doDownSample% then
+                ChanProcessClear(VmChan%, ChanProcessInfo(VmChan%));
+                ChanProcessClear(ImChan%, ChanProcessInfo(ImChan%));
+            endif
+            if doSmooth% then
+                ChanProcessClear(VmChan%, ChanProcessInfo(VmChan%));
+                ChanProcessClear(ImChan%, ChanProcessInfo(ImChan%));
+            endif
+            placeResultViews();
+        endif
+    endif
+    'print regression values in the log
+    PrintLog("### %s %s - file: %s\n", Date$(), Time$(), view(dataFileHdl%).FileName$());
+    PrintLog("    RMP=%.2f mV\n", rmp);
+    PrintLog("Linear Regressions: Peak value - R=%.2f MOhm - G=%.4f uS\n",Rpeak,1/Rpeak);
+    PrintLog("                    Plat value - R=%.2f MOhm - G=%.4f uS\n",Rplat,1/Rplat);
+    PrintLog("                    Sag Ratio - SR=%.2f\n",Rpeak/Rplat);
+    PrintLog("---\n");
+    PrintLog("%.2f\t%.2f\t%.2f\t%.2f\t%s\n",rmp,Rpeak,Rplat,Rpeak/Rplat,theFileName$);
+end
+
+func dlgChange%(item%)
+    var result% := 1;
+    var nbChan%;
+    var chanArr%[1];
+    docase
+    case item%=0 then 'first call
+        'update all
+        dlgChange%(doSmoothItem%);
+        dlgChange%(doDownSampleItem%);
+    case item%=doSmoothItem% then
+        DlgEnable(DlgValue(doSmoothItem%),smoothTimeCstItem%);
+    case item%=doDownSampleItem% then
+        DlgEnable(DlgValue(doDownSampleItem%), downSampleFreqItem%);
+    endcase
+    return result%;
+end

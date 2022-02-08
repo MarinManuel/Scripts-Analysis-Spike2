@@ -1,0 +1,105 @@
+'#### incl_SQLFunctions.s2s
+'#### Marin Manuel
+'#
+'# this file provides functions to select/insert data into a SQL file
+
+#include "incl_locals.s2s"
+#include "incl_stringFunctions.s2s"
+
+func MySQLquery%(query$,result$[][])
+    'this function sends one SQL query to the MySQL server and returns a Matrix containing
+    'the results in text
+    'it is the user's responsability to provide a matrix of sufficient dimensions to collect
+    'the results.
+    '* In the case of a SELECT statement, the function returns the number of rows that the query
+    '  generates, wether the array is big enough or not.
+    '* In the case of a INSERT statement, the function returns the value of the auto-incremented key (if any)
+    var batFileName$,batFileHdl%;
+    var resFileName$,resFileHdl%;
+    var oldHdl%;
+    var cmdString$,cmdResult%,line$,cmdResult$;
+    var numRows% := 0;
+    var returnVal%;
+    
+    docase
+    case UCase$(Left$(query$,6))="INSERT" then
+        if Right$(query$,1)<>";" then
+            query$ += ";";
+        endif;
+        query$ += "SELECT LAST_INSERT_ID();";
+    endcase;
+    batFileName$ := tmpPath$+Date$(2,2,1,3,"-")+"-"+Time$(1,1+2+4,3,"-")+"-"+Print$("%06d",Rand(1000000,0));
+    resFileName$ := batFileName$+".result";
+    batFileName$ := batFileName$+".bat";
+    'WARNING! '%' signs need to be doubled in batch files
+    replaceStr(query$,"%","%%");
+    oldHdl% := view();
+    batFileHdl% := FileOpen(batFileName$,8,1);
+    if batFileHdl% > 0 then
+        view(batFileHdl%);
+        Print("mysql --login-path=%s -D%s -s --skip-column-names -e \"%s\" > %s 2>&1",MySQLloginpath$,MySQLDB$,query$,resFileName$);
+        FileClose();
+        view(oldHdl%);
+    else
+        Message("Impossible to perform SQL query!\nError creating temp. sql file");
+        halt;
+    endif;
+    cmdResult% := ProgRun(batFileName$,0);
+    while ProgStatus(cmdResult%) = 1 do
+        Yield();
+    wend;
+    if cmdResult% < 0 then
+        Message("Impossible to perform SQL query!\nError when launching ext mysql");
+        halt;
+    else
+        oldHdl% := view();
+        resFileHdl% := FileOpen(resFileName$,8,0);
+        if resFileHdl% > 0 then
+            view(resFileHdl%);
+            while Read(line$) >= 0 do
+                if Left$(line$,5)="ERROR" then
+                    'there was an error in the SQL query
+                    Message("Error in the SQL query!\n\n"+line$);
+                    halt;
+                else
+                    numRows% += 1;  
+                    if numRows% <= Len(result$[][0]) then
+                        ReadSetup("\t","","","","\t");
+                        ReadStr(line$,result$[numRows%-1][]);
+                        ReadSetup();
+                    endif;
+                endif;
+            wend;
+            FileClose();
+            view(oldHdl%);
+        else
+            Message("Impossible to perform SQL query!\nCannot open result file");
+            halt;
+        endif
+    endif;
+    FileDelete(batFileName$);
+    FileDelete(resFileName$);
+    view(oldHdl%);
+    docase
+    case UCase$(Left$(query$,6))="INSERT" then
+        returnVal% := Val(result$[0][0]);
+    case UCase$(Left$(query$,6))="SELECT" then
+        returnVal% := numRows%;
+    else
+        returnVal% := 0;
+    endcase;
+    return returnVal%;
+end;
+
+func MySQLconvRes2List$(MySQLres$[])
+    'this function converts an array of results obtained from a MySQL query,
+    'to a string list "item1|item2|item3" usable for DlgString() for example
+    var i%;
+    var result$;
+    for i% := 0 to Len(MySQLres$[])-1 do
+        if Len(MySQLres$[i%]) > 0 then
+            result$ += MySQLres$[i%]+"|";
+        endif;
+    next;
+    return result$
+end;

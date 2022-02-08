@@ -1,0 +1,819 @@
+'###### analysis_spike.s2s
+'## Marin Manuel
+'##
+
+'the table output has the following format:
+'Spike/AHP:
+'RMP (mV)    Spike overshoot (mV) Spike height (mV) Spike width (ms)    AHP ampl (mV)   AHP t2p (ms)    AHP 1/2 relax (ms)  AHP duration (ms)   AHP tau (ms)
+'EMG:
+'EMG delay (ms) EMG ampl (V)    EMG duration (ms)   EMG area (V.ms)
+'Twitch:
+'Twitch delay (ms)  Twitch ampl (mN)    Twitch t2p (ms) Twitch half relax (ms)  Twitch duration (ms)    twitch area (mN.ms)
+
+
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+#include "includes/incl_IFcurve.s2s"
+
+
+'## Global variables ##
+var i%;
+var resultViewHdl%, tauAHPViewHdl%;
+var viewType%;
+var pulseStartTime := 0.0; 's
+var pulseDur := 0.001; 's
+var ok%;
+var RMPHCur%, spikeHeightHCur%, spikeWidthHCur%, spikeBinCur%, spikeLeftBinCur%, spikeRightBinCur%;
+var spikeFootCur%, AHPPeakCur%, AHPHalfRelaxCur%, AHPEndCur%, AHPPeakHCur%, AHPHalfRelaxHCur%;
+var EMGBaselineHCur%, EMGStartCur%, EMGEndCur%;
+var twitchBaselineHCur%, twitchPeakHCur%, twitchStartCur%, twitchEndCur%, twitchPeakCur%, twitchHalfRelaxHCur%, twitchHalfRelaxCur%;
+var didSpike%, didAHP%, didEMG%, didTwitch%;
+var virtChan%;
+var tauAHPLeftCur%, tauAHPRightCur%, tauAHPbaselineHCur%, tauAHPbaseline;
+var theFileName$;
+var spreadSheetLog$ := "";
+var tempString$ := "";
+
+'##Global constants
+const WINDOWFORSPIKEFIND := 5e-3; 's
+const MINAHPAMPLCRITERIA := 1.0; 'mV
+const AHPENDTIMECRITERIA := 0.99; 'AHP ends when Vm returns to 1% of baseline
+const EMGSTARTENDCRITERIA := 0.99; 'EMG ends when trace returns to 1% of baseline
+const TWITCHSTARTENDCRITERIA := 0.99; 'EMG ends when trace returns to 1% of baseline
+const EMGENDMAXTIME := 10e-3; 's -- Max time to search for end of EMG
+const IDLETIME := 0.25; 's -- the time between each idle function execution
+
+'##Result variables
+var RMP,
+spikeTime, spikeOvershoot, spikeHeight, spikeWidth, spikeLeftBin, spikeRightBin, spikeFootTime,
+AHPAmpl, AHPPeakTime, AHPT2P, AHPHalfRelax, AHPHalfRelaxTime, AHPEndTime, AHPDuration, AHPTau,
+EMGBaseline, EMGStartTime, EMGEndTime, EMGDelay, EMGDuration, EMGAmpl, EMGArea,
+twitchStartTime, twitchEndTime, twitchDelay, twitchBaseline, twitchDuration,twitchT2P,twitchPeak,
+twitchPeakTime,twitchAmpl,twitchArea,twitchHalfRelax, twitchHalfRelaxTime;
+
+
+resultViewHdl% := view();
+viewType% := ViewKind(resultViewHdl%);
+theFileName$ := FileName$(3)+FileName$(4);
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+if viewType% <> 4 then 'result view
+    Message("Error: Script must be run on a result view");
+    halt
+endif
+
+DlgCreate("Parameters");
+DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+DlgChan(2,"EMG Channel", 0x1+0x10+0x200);
+DlgChan(3,"Force Channel", 0x1+0x10+0x200);
+DlgXValue(4,"Time of the start of the current pulse (s)");
+ok% := DlgShow(VmChan%, emgChan%, forceChan%, pulseStartTime);
+if ok% then
+    saveCursors();
+    
+    ToolbarClear();
+    ToolbarText("Choose a component to measure");
+    ToolbarSet(-1, "Finish", doQuit%);
+    ToolbarSet(2, "Spike", doSpike%);
+    ToolbarSet(3, "AHP", doAHP%);
+    ToolbarSet(4, "tauAHP", doTauAHP%); ToolbarEnable(4, 0);
+    ToolbarSet(5, "EMG", doEMG%);
+    ToolbarSet(6, "Twitch", doTwitch%);
+    Toolbar("",1+4+32+64+256,0);
+endif
+halt
+
+
+func doQuit%()
+    if Query("Restore original cursors?")=1 then
+        restoreCursors();
+    endif
+    
+    'restore view
+    XRange(0,MaxTime());
+    Optimise(-1);
+    
+    if tauAHPViewHdl%>0 and ViewKind(tauAHPViewHdl%)=0 then
+        view(tauAHPViewHdl%);FileClose();
+        view(resultViewHdl%);
+    endif
+    
+    'PRINT RESULTS HERE
+    
+    if didSpike% then
+        'write values in log
+        PrintLog("%s %s - Spike measurements on [%s]\n",Date$(), Time$(), theFileName$+FileName$(5));
+        PrintLog("--------------------------------------------------------------------------------\n");
+        PrintLog("RMP : %.2f mV\n",RMP);
+        PrintLog("Spike Overshoot: %.2fmV, Spike height: %.2f mV, Spike width: %.2f ms\n", spikeOvershoot, spikeHeight, spikeWidth);
+        PrintLog("AHP ampl: %.2f mV, AHP Time-to-peak: %.2f ms\n", AHPAmpl, AHPT2P);
+        PrintLog("AHP duration: %.2f ms, AHP 1/2 relax: %.2f ms\n", AHPDuration, AHPHalfRelax);
+        PrintLog("AHP time constant: %.2f ms\n", AHPTau);
+        PrintLog("-----------------------------------------------------------------------\n");
+        tempString$ := Print$("%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%s",RMP,spikeOvershoot,spikeHeight,spikeWidth,AHPAmpl,AHPT2P,AHPHalfRelax,AHPDuration,AHPTau,theFileName$);
+        PrintLog(tempString$+"\n");
+        spreadSheetLog$ += tempString$+"\t";
+        
+    endif
+    
+    if didTwitch% then
+        'output data
+        PrintLog("%s %s - Twitch measurements on [%s]\n",Date$(), Time$(), theFileName$+FileName$(5));
+        PrintLog("-----------------------------------------------------------------------\n");
+        PrintLog("delay:       %6.1f m%s\n",twitchDelay, XUnits$());
+        PrintLog("amplitude:   %6.3f %s\n", twitchAmpl, ChanUnits$(forceChan%));
+        PrintLog("time-2-peak: %6.1f m%s\n", twitchT2P, XUnits$());
+        PrintLog("half relax:  %6.1f m%s\n", twitchHalfRelax, XUnits$());
+        PrintLog("duration:    %6.1f m%s\n", twitchDuration, XUnits$());
+        PrintLog("area:        %6.3f %s.m%s\n", twitchArea, ChanUnits$(forceChan%), XUnits$());
+        PrintLog("-----------------------------------------------------------------------\n");
+        tempString$ := Print$("%f\t%f\t%f\t%f\t%f\t%f\t%s", twitchDelay, twitchAmpl, twitchT2P, twitchHalfRelax, twitchDuration, twitchArea, theFileName$);
+        PrintLog(tempString$+"\n");
+        spreadSheetLog$ += tempString$+"\t";
+    endif
+    
+    if didEMG% then
+        'output data
+        PrintLog("%s %s - EMG measurements on [%s]\n",Date$(), Time$(), theFileName$+FileName$(5));
+        PrintLog("-----------------------------------------------------------------------\n");
+        PrintLog("delay:       %6.1f m%s\n",EMGDelay, XUnits$());
+        PrintLog("amplitude:   %6.3f %s\n", EMGAmpl, ChanUnits$(emgChan%));
+        PrintLog("duration:    %6.1f m%s\n", EMGDuration, XUnits$());
+        PrintLog("area:        %6.3f %s.m%s\n", EMGArea, ChanUnits$(emgChan%), XUnits$());
+        PrintLog("-----------------------------------------------------------------------\n");
+        tempString$ := Print$("%f\t%f\t%f\t%f\t%s", EMGDelay, EMGAmpl, EMGDuration, EMGArea, theFileName$);
+        PrintLog(tempString$+"\n");
+        spreadSheetLog$ += tempString$+"\t";
+    endif
+    
+    'copy spreadsheet data to clipboard
+    var clipHdl%;
+    clipHdl% := FileNew(1);
+    Print(spreadSheetLog$);
+    EditSelectAll();
+    EditCopy();
+    FileClose(0,-1);
+    
+    return 0;
+end
+
+func doSpike%()
+    view(resultViewHdl%);
+    
+    'estimate values
+    RMP := estimateRMP(VmChan%, XToBin(pulseStartTime));
+    spikeTime := BinToX(estimateSpikeBin(VmChan%, XToBin(pulseStartTime)));
+    spikeOvershoot := view(0, VmChan%).[XToBin(spikeTime)];
+    spikeHeight := spikeOvershoot-RMP;
+    spikeWidth := estimateSpikeWidth(VmChan%, XToBin(spikeTime), RMP, spikeLeftBin, spikeRightBin);
+    didSpike% := 1;
+    
+    'create Spike cursors
+    createSpikeCursors(VmChan%, RMPHCur%, spikeHeightHCur%, spikeWidthHCur%, spikeBinCur%, spikeLeftBinCur%, spikeRightBinCur%);
+    doSpikeAnalysis%();
+    
+    'zoom view
+    XRange(pulseStartTime-2e-3,spikeTime+5e-3);
+    Optimise(-1);
+    
+    var ok%,finished%:=0;
+    repeat
+        ok% := Interact("Place cursors",1+2+4+8+16+32+64+128+256,0,"&OK","&Cancel","&Half-Height Cursor");
+        docase
+        case ok% = 1 then
+            doSpikeAnalysis%();
+            finished%:=1;
+        case ok% = 2 then
+            'do nothing
+            finished%:=1;
+        case ok% = 3 then
+            doSpikeAnalysis%();
+            finished%:=0;
+        else
+            finished%:=0;
+        endcase
+    until finished%;
+    
+    return 1;
+end
+
+
+
+func estimateRMP(VmChan%, pulseStartBin)
+    var RMP;
+    if pulseStartBin>0 then
+        ArrSum(view(0,VmChan%).[0:pulseStartBin],RMP);
+    else
+        RMP := view(0,VmChan%).[pulseStartBin];
+    endif
+    return RMP;
+end
+
+func estimateSpikeBin(VmChan%, pulseStartBin)
+    var spikePeakBin;
+    spikePeakBin := ChanSearch(VmChan%,4,pulseStartBin,pulseStartBin+WINDOWFORSPIKEFIND/BinSize(VmChan%),20.0);
+    if spikePeakBin<0 then
+        spikePeakBin := 0;
+    endif
+    return spikePeakBin;
+end
+
+func estimateSpikeWidth(VmChan%, spikeBin, RMP, &spikeLeftBin, &spikeRightBin)
+    var spikeHeight;
+    var spikeWidth;
+    spikeHeight := view(0, VmChan%).[spikeBin]-RMP;
+    var searchLeft, searchRight;
+    searchLeft := spikeBin-WINDOWFORSPIKEFIND/BinSize(VmChan%);
+    if searchLeft<0 then
+        searchLeft := 0;
+    endif
+    searchRight := spikeBin+WINDOWFORSPIKEFIND/BinSize(VmChan%);
+    if searchRight<0 then
+        searchRight := 0;
+    endif
+    spikeLeftBin := ChanSearch(VmChan%, 8, spikeBin, searchLeft, RMP+spikeHeight/2);
+    spikeRightBin := ChanSearch(VmChan%, 8, spikeBin, searchRight, RMP+spikeHeight/2);
+    spikeWidth := (spikeRightBin-spikeLeftBin)*BinSize(VmChan%)*1e3;
+    return spikeWidth;
+end
+
+
+proc createSpikeCursors(VmChan%, &RMPHCur%, &spikeHeightHCur%, &spikeWidthHCur%, &spikeBinCur%, &spikeLeftBinCur%, &spikeRightBinCur%);
+    CursorDelete(-1);
+    HCursorDelete(-1);
+    
+    RMPHCur% := HCursorNew(VmChan%, RMP);
+    spikeHeightHCur% := HCursorNew(VmChan%, spikeOvershoot);
+    spikeWidthHCur% := HCursorNew(VmChan%, RMP+spikeHeight/2);
+    
+    spikeBinCur% := CursorNew(XToBin(spikeTime));
+    spikeLeftBinCur% := CursorNew(spikeLeftBin);
+    spikeRightBinCur% := CursorNew(spikeRightBin);
+    
+    updateSpikeCursors(VmChan%, RMPHCur%, spikeHeightHCur%, spikeWidthHCur%, spikeBinCur%, spikeLeftBinCur%, spikeRightBinCur%);
+end
+
+func doSpikeAnalysis%()
+    'check if cursors have been moved
+    if HCursor(RMPHCur%)<>RMP then 'user moved RMP cursor
+        RMP := HCursor(RMPHCur%);
+        spikeHeight := spikeOvershoot-RMP;
+    endif
+    
+    if Cursor(spikeBinCur%)<>XToBin(spikeTime) then 'user moved the spike time cursor
+        spikeTime := BinToX(Cursor(spikeBinCur%));
+        spikeOvershoot := view(0, VmChan%).[XToBin(spikeTime)];
+        spikeHeight := spikeOvershoot-RMP;
+        spikeWidth := estimateSpikeWidth(VmChan%, XToBin(spikeTime), RMP, spikeLeftBin, spikeRightBin);
+    endif
+    
+    if Cursor(spikeLeftBinCur%)<>spikeLeftBin then
+        spikeLeftBin := Cursor(spikeLeftBinCur%);
+        spikeWidth := (spikeRightBin-spikeLeftBin)*BinSize(VmChan%)*1e3;
+    endif
+    
+    if Cursor(spikeRightBinCur%)<>spikeRightBin then
+        spikeRightBin := Cursor(spikeRightBinCur%);
+        spikeWidth := (spikeRightBin-spikeLeftBin)*BinSize(VmChan%)*1e3;
+    endif
+    
+    'update display
+    updateSpikeCursors(VmChan%, RMPHCur%, spikeHeightHCur%, spikeWidthHCur%, spikeBinCur%, spikeLeftBinCur%, spikeRightBinCur%);
+    
+    return 1;
+end
+
+proc updateSpikeCursors(VmChan%, RMPHCur%, spikeHeightHCur%, spikeWidthHCur%, spikeBinCur%, spikeLeftBinCur%, spikeRightBinCur%)
+    HCursor(RMPHCur%, RMP, VmChan%);
+    HCursorLabel(4, RMPHCur%, "RMP");
+    
+    HCursor(spikeHeightHCur%, spikeOvershoot, VmChan%);
+    HCursorLabel(4, spikeHeightHCur%, "Height");
+    
+    HCursor(spikeWidthHCur%, RMP+spikeHeight/2, VmChan%);
+    HCursorLabel(4, spikeWidthHCur%, "Width");
+    
+    Cursor(spikeBinCur%,XToBin(spikeTime));
+    CursorLabel(4,spikeBinCur%,"Spike time");
+    
+    Cursor(spikeLeftBinCur%, spikeLeftBin);
+    CursorLabel(4,spikeLeftBinCur%,">");
+    
+    Cursor(spikeRightBinCur%, spikeRightBin);
+    CursorLabel(4,spikeRightBinCur%,"<");
+end
+
+
+
+func doAHP%()
+    view(resultViewHdl%);
+    var ok%;
+    if not didSpike% then
+        RMP := estimateRMP(VmChan%, XToBin(pulseStartTime));
+        DlgCreate("Parameters for AHP measurements");
+        DlgReal(1, "RMP (mV)",-inf, inf);
+        DlgXValue(2, "Spike time");
+        ok% := DlgShow(RMP, spikeTime);
+        if not ok% then
+            return 1;
+        endif
+    endif
+    'estimate values
+    spikeFootTime := estimateSpikeFootTime(VmChan%, spikeTime, RMP);
+    AHPPeakTime := estimateAHPPeakTime(VmChan%, spikeTime);
+    AHPHalfRelaxTime := estimateAHPHalfRelaxTime(VmChan%, AHPPeakTime, RMP);
+    AHPEndTime := estimateAHPEndTime(VmChan%, AHPPeakTime, RMP);
+    
+    AHPT2P := AHPPeakTime-spikeFootTime;
+    AHPHalfRelax := AHPHalfRelaxTime-AHPPeakTime;
+    AHPDuration := AHPEndTime-spikeFootTime;
+    AHPAmpl := abs(view(0,VmChan%).[XToBin(AHPPeakTime)]-RMP);
+    
+    didAHP% := 1;
+    'ToolbarEnable(4, 1);
+    
+    'create cursors
+    createAHPCursors(VmChan%, spikeFootCur%, AHPPeakCur%, AHPHalfRelaxCur%, AHPEndCur%, RMPHCur%, AHPPeakHCur%, AHPHalfRelaxHCur%);
+    doAHPAnalysis%();
+    
+    'zoom view
+    XRange(spikeFootTime-1e-3, AHPEndTime+5e-3);
+    YRange(VmChan%,RMP-AHPAmpl-5, RMP+5);
+    
+    var finished%:=0;
+    repeat
+        ok% := Interact("Place Cursors",1+2+4+8+16+32+64+128+256,0,"&OK","&Cancel","&Half-Height Cursor");
+        docase
+        case ok% = 1 then
+            doAHPAnalysis%();
+            finished% := 1;
+        case ok% = 2 then
+            finished% := 1;
+        case ok% = 3 then
+            doAHPAnalysis%();
+            finished% := 0;
+        else
+            finished% := 0;
+        endcase
+        
+    until finished%;
+    
+    return 1;
+end
+func estimateSpikeFootTime(VmChan%, spikeTime, RMP)
+    var spikeFootBin,spikeFootBinTemp%;
+    'in 1st approx, the foot of the spike is the point where the voltage falls below the RMP
+    spikeFootBin := ChanSearch(VmChan%,8,XToBin(spikeTime),MaxTime(VmChan%),RMP);
+    if spikeFootBin>0 then
+        'However, this could be after the after-depolarization...
+        'if there is a turning point between the spike and the foot, then use this point as the foot instead
+        spikeFootBinTemp% := ChanSearch(VmChan%,17,XToBin(spikeTime),spikeFootBin)-1;
+        if spikeFootBinTemp%>0 then
+            spikeFootBin := spikeFootBinTemp%;
+        endif
+    endif
+    return BinToX(spikeFootBin);
+end
+
+func estimateAHPPeakTime(VmChan%, spikeTime)
+    var AHPPeakBin;
+    AHPPeakBin := ChanSearch(VmChan%, 5, MaxTime(VmChan%), XToBin(spikeTime), MINAHPAMPLCRITERIA);
+    AHPPeakTime := BinToX(AHPPeakBin);
+    return AHPPeakTime;
+end
+
+func estimateAHPHalfRelaxTime(VmChan%, AHPPeakTime, RMP)
+    var AHPHalfRelaxBin, AHPAmpl;
+    AHPAmpl := abs(view(0,VmChan%).[XToBin(AHPPeakTime)]-RMP);
+    AHPHalfRelaxBin := ChanSearch(VmChan%, 7, XToBin(AHPPeakTime), MaxTime(VmChan%), RMP-AHPAmpl/2);
+    return BinToX(AHPHalfRelaxBin);
+end
+
+func estimateAHPEndTime(VmChan%, AHPPeakTime, RMP)
+    var AHPEndBin, AHPAmpl;
+    AHPAmpl := abs(view(0,VmChan%).[XToBin(AHPPeakTime)]-RMP);
+    AHPEndBin := ChanSearch(VmChan%, 7, XToBin(AHPPeakTime), MaxTime(VmChan%), RMP-(1-AHPENDTIMECRITERIA)*AHPAmpl);
+    return BinToX(AHPEndBin);
+end
+
+proc createAHPCursors(VmChan%, &spikeFootCur%, &AHPPeakCur%, &AHPHalfRelaxCur%, &AHPEndCur%, &RMPHCur%, &AHPPeakHCur%, &AHPHalfRelaxHCur%)
+    CursorDelete(-1);
+    HCursorDelete(-1);
+    
+    spikeFootCur% := CursorNew(XToBin(spikeFootTime));
+    AHPPeakCur% := CursorNew(XToBin(AHPPeakTime));
+    AHPHalfRelaxCur% := CursorNew(XToBin(AHPHalfRelaxTime));
+    AHPEndCur% := CursorNew(XToBin(AHPEndTime));
+    
+    RMPHCur% := HCursorNew(VmChan%, RMP);
+    AHPPeakHCur% := HCursorNew(VmChan%, RMP-AHPAmpl);
+    AHPHalfRelaxHCur% := HCursorNew(VmChan%, RMP-AHPAmpl/2);
+end
+
+func doAHPAnalysis%()
+    if Cursor(spikeFootCur%)<>XToBin(spikeFootTime) then
+        spikeFootTime := BinToX(Cursor(spikeFootCur%));
+        AHPT2P := (AHPPeakTime-spikeFootTime)*1e3;
+        AHPDuration := (AHPEndTime-spikeFootTime)*1e3;
+    endif
+    
+    if Cursor(AHPPeakCur%)<>XToBin(AHPPeakTime) then
+        AHPPeakTime := BinToX(Cursor(AHPPeakCur%));
+        AHPT2P := (AHPPeakTime-spikeFootTime)*1e3;
+        AHPDuration := (AHPEndTime-spikeFootTime)*1e3;
+    endif
+    
+    if Cursor(AHPEndCur%)<>XToBin(AHPEndTime) then
+        AHPEndTime := BinToX(Cursor(AHPEndCur%));
+        AHPDuration := (AHPEndTime-spikeFootTime)*1e3;
+    endif
+    
+    if Cursor(AHPHalfRelaxTime)<>XToBin(AHPHalfRelaxTime) then
+        AHPHalfRelaxTime := BinToX(Cursor(AHPHalfRelaxCur%));
+        AHPHalfRelax := (AHPHalfRelaxTime-AHPPeakTime)*1e3;
+    endif
+    
+    if HCursor(RMPHCur%)<>RMP then
+        RMP := HCursor(RMPHCur%);
+        AHPAmpl := abs(view(0,VmChan%).[XToBin(AHPPeakTime)]-RMP);
+    endif
+    
+    if HCursor(AHPPeakHCur%)<>RMP-AHPAmpl then
+        AHPAmpl := abs(HCursor(AHPPeakHCur%)-RMP);
+    endif
+    
+    updateAHPCursors(VmChan%, spikeFootCur%, AHPPeakCur%, AHPHalfRelaxCur%, AHPEndCur%, RMPHCur%, AHPPeakHCur%, AHPHalfRelaxHCur%);
+    return 1;
+end
+
+proc updateAHPCursors(VmChan%, spikeFootCur%, AHPPeakCur%, AHPHalfRelaxCur%, AHPEndCur%, RMPHCur%, AHPPeakHCur%, AHPHalfRelaxHCur%)
+    Cursor(spikeFootCur%, XToBin(spikeFootTime));
+    CursorLabel(4, spikeFootCur%, ">");
+    
+    Cursor(AHPPeakCur%, XToBin(AHPPeakTime));
+    CursorLabel(4, AHPPeakCur%, "t2p");
+    
+    Cursor(AHPHalfRelaxCur%, XToBin(AHPHalfRelaxTime));
+    CursorLabel(4, AHPHalfRelaxCur%, "1/2 relax");
+    
+    Cursor(AHPEndCur%, XToBin(AHPEndTime));
+    CursorLabel(4, AHPEndCur%, "dur");
+    
+    HCursor(RMPHCur%, RMP, VmChan%);
+    HCursorLabel(4, RMPHCur%, "RMP");
+    
+    HCursor(AHPPeakHCur%, RMP-AHPAmpl, VmChan%);
+    HCursorLabel(4, AHPPeakHCur%, "Ampl");
+    
+    HCursor(AHPHalfRelaxHCur%, RMP-AHPAmpl/2, VmChan%);
+    HCursorLabel(0, AHPHalfRelaxHCur%);
+end
+
+
+
+func doTauAHP%()
+    ToolbarClear(0);
+    
+    tauAHPViewHdl% := res2smr%(resultViewHdl%);
+    if tauAHPViewHdl%>0 then
+        view(resultViewHdl%);
+        Window(50,0,100,100);
+        
+        view(tauAHPViewHdl%);
+        ChanHide(-1);
+        ChanShow(VmChan%);
+        XRange(binToSMR(view(resultViewHdl%).XLow(),resultViewHdl%),binToSMR(view(resultViewHdl%).XHigh(),resultViewHdl%));
+        YRange(VmChan%,view(resultViewHdl%).YLow(VmChan%),view(resultViewHdl%).YHigh(VmChan%));
+        Window(0,0,50,100);
+        WindowVisible(1);
+        
+        'create virtual channel
+        tauAHPbaseline := RMP;
+        virtChan% := VirtualChan(0, Print$("ln(abs(Ch(%d)-%f))",VmChan%,tauAHPbaseline), VmChan%);
+        ChanShow(virtChan%);
+        
+        'puts some cursors
+        
+        tauAHPLeftCur% := CursorNew(xToSMR(AHPHalfRelaxTime, resultViewHdl%));
+        tauAHPRightCur% := CursorNew(xToSMR(AHPEndTime, resultViewHdl%));
+        tauAHPbaselineHCur% := HCursorNew(VmChan%, RMP);
+        
+        'start idle function
+        ToolbarSet(0, "", idleTauAHPAnalysis%);
+        
+    else
+        Message("Error: could not create time view");
+    endif
+    return 1;
+end
+
+func idleTauAHPAnalysis%()
+    if Seconds()>IDLETIME then
+        Seconds(0);
+    else
+        return 1;
+    endif
+    
+    if HCursor(tauAHPbaselineHCur%)<>tauAHPbaseline then
+        tauAHPbaseline := HCursor(tauAHPbaselineHCur%);
+        VirtualChan(virtChan%, Print$("ln(abs(Ch(%d)-%f))",VmChan%,tauAHPbaseline), VmChan%);
+    endif
+    
+    'do fit
+    ChanFit(virtChan%, 2 ,1); 'create 1st order polynomial fit on virtChan%
+    ChanFit(virtChan%, 1+2, Cursor(tauAHPLeftCur%), Cursor(tauAHPRightCur%));
+    ChanFitShow(virtChan%, 1+2, XLow(), XHigh());
+    AHPTau := 1e3/abs(ChanFitCoef(virtChan%, 1));
+    ToolbarText(Print$("AHP time constant: %.2f ms", AHPTau));
+    
+    return 1;
+end
+
+
+
+
+
+
+
+func doEMG%()
+    view(resultViewHdl%);
+    
+    if not didSpike% then
+        DlgCreate("Parameters for EMG measurements");
+        DlgXValue(1, "Spike time");
+        DlgShow(spikeTime);
+    endif
+    
+    'estimate values
+    EMGStartTime := estimateEMGStartTime(emgChan%, spikeTime);
+    EMGEndTime := estimateEMGEndTime(emgChan%, spikeTime);
+    'measures
+    doEMGMeasures(spikeTime, EMGStartTime, EMGEndTime);
+    
+    'create cursors
+    createEMGCursors(emgChan%, EMGBaselineHCur%, EMGStartCur%, EMGEndCur%);
+    doEMGAnalysis%();
+    
+    'zoom view
+    XRange(spikeTime-5e-3, EMGEndTime+5e-3);
+    Optimise(-1);
+    
+    var ok%,finished%:=0;
+    repeat
+        ok% := Interact("Place Cursors",1+2+4+8+16+32+64+128+256,0,"&OK","&Cancel");
+        if ok% = 1 then
+            doEMGAnalysis%();
+            finished%:=1;
+        else
+            finished%:=1;
+        endif
+        
+    until finished%;
+    
+    return 1;
+end
+
+proc createEMGCursors(emgChan%, &EMGBaselineHCur%, &EMGStartCur%, &EMGEndCur%)
+    HCursorDelete(-1);
+    CursorDelete(-1);
+    
+    EMGBaselineHCur% := HCursorNew(emgChan%, EMGBaseline);
+    EMGStartCur% := CursorNew(XToBin(EMGStartTime));
+    EMGEndCur% := CursorNew(XToBin(EMGEndTime));
+end
+
+func doEMGAnalysis%()
+    if Cursor(EMGStartCur%)<>XToBin(EMGStartTime) then
+        EMGStartTime := BinToX(Cursor(EMGStartCur%));
+    endif
+    if Cursor(EMGEndCur%)<>XToBin(EMGEndTime) then
+        EMGEndTime := BinToX(Cursor(EMGEndCur%));
+    endif
+    doEMGMeasures(spikeTime, EMGStartTime, EMGEndTime);
+    
+    updateEMGCursors(emgChan%, EMGBaselineHCur%, EMGStartCur%, EMGEndCur%);
+    return 1;
+end
+
+proc updateEMGCursors(emgChan%, EMGBaselineHCur%, EMGStartCur%, EMGEndCur%);
+    HCursor(EMGBaselineHCur%, EMGBaseline, emgChan%);
+    HCursorLabel(0, EMGBaselineHCur%);
+    
+    Cursor(EMGStartCur%, XToBin(EMGStartTime));
+    CursorLabel(4, EMGStartCur%, "delay");
+    
+    Cursor(EMGEndCur%, XToBin(EMGEndTime));
+    CursorLabel(4, EMGEndCur%, "duration");
+end
+
+proc doEMGMeasures(spikeTime, EMGStartTime, EMGEndTime)
+    EMGDelay := (EMGStartTime-spikeTime)*1e3;
+    EMGDuration := (EMGEndTime-EMGStartTime)*1e3;
+    EMGAmpl := ChanMeasure(emgChan%, 10, EMGStartTime, EMGEndTime);
+    EMGArea := ChanMeasure(emgChan%, 7, EMGStartTime, EMGEndTime)*1e3;
+    didEMG% := 1;
+end
+
+func estimateEMGStartTime(emgChan%, spikeTime)
+    var result,tempResult;
+    var EMGPeakBin, EMGAmpl;
+    result := XToBin(spikeTime);
+    EMGBaseline := ChanMeasure(emgChan%, 2, BinToX(0), spikeTime);
+    EMGAmpl := ChanMeasure(emgChan%, 10, spikeTime, spikeTime+EMGENDMAXTIME);
+    'search for threshold crossing in the + direction
+    result := ChanSearch(emgChan%, 7, XToBin(spikeTime), XToBin(spikeTime+EMGENDMAXTIME), EMGbaseline+(1-EMGSTARTENDCRITERIA)*EMGAmpl);
+    if result<0 then
+        return 0
+    endif
+    'search for a crossing in the - direction between spikeTime and the time found prev
+    tempResult := ChanSearch(emgChan%, 8, XToBin(spikeTime), result, EMGbaseline-(1-EMGSTARTENDCRITERIA)*EMGAmpl);
+    if tempResult>0 and tempResult<result then
+        result := tempResult;
+    endif
+    return BinToX(result);
+end
+
+func estimateEMGEndTime(emgChan%, spikeTime)
+    var result,tempResult;
+    var EMGPeakBin, EMGAmpl;
+    result := XToBin(spikeTime);
+    EMGBaseline := ChanMeasure(emgChan%, 2, BinToX(0), spikeTime);
+    EMGAmpl := ChanMeasure(emgChan%, 10, spikeTime, spikeTime+EMGENDMAXTIME);
+    'search for threshold crossing in the + direction
+    result := ChanSearch(emgChan%, 7, XToBin(spikeTime+EMGENDMAXTIME), XToBin(spikeTime), EMGbaseline+(1-EMGSTARTENDCRITERIA)*EMGAmpl);
+    if result<0 then
+        return 0
+    endif
+    'search for a crossing in the - direction between spikeTime and the time found prev
+    tempResult := ChanSearch(emgChan%, 8, XToBin(spikeTime+EMGENDMAXTIME), result, EMGbaseline-(1-EMGSTARTENDCRITERIA)*EMGAmpl);
+    if tempResult>0 and tempResult>result then
+        result := tempResult;
+    endif
+    return BinToX(result);
+end
+
+
+
+
+
+
+func doTwitch%()
+    view(resultViewHdl%);
+    ToolbarClear(0);
+    
+    if not didSpike% then
+        DlgCreate("Parameters for twitch measurements");
+        DlgXValue(1, "Spike time");
+        DlgShow(spikeTime);
+    endif
+    
+    'estimate values
+    twitchStartTime := estimateTwitchStartTime(forceChan%, spikeTime);
+    twitchEndTime := estimateTwitchEndTime(forceChan%, spikeTime);
+    twitchPeakTime := estimateTwitchPeakTime(forceChan%, spikeTime);
+    twitchHalfRelaxTime := estimateTwitchHalfRelaxTime(forceChan%, spikeTime);
+    'measures
+    doTwitchMeasures(spikeTime, twitchStartTime, twitchEndTime, twitchPeakTime, twitchHalfRelaxTime);
+    
+    'create cursors
+    createTwitchCursors(forceChan%, twitchBaselineHCur%, twitchPeakHCur%, twitchHalfRelaxHCur%, twitchStartCur%, twitchEndCur%, twitchPeakCur%, twitchHalfRelaxCur%);
+    doTwitchAnalysis%();
+    
+    'zoom view
+    XRange(spikeTime-5e-3, twitchEndTime+5e-3);
+    Optimise(-1);
+    
+    var ok%,finished%:=0;
+    repeat
+        ok% := Interact("Place Cursors",1+2+4+8+16+32+64+128+256,0,"&OK","&Cancel","&Half-Height Cursor");
+        docase
+        case ok% = 1 then
+            doTwitchAnalysis%();
+            finished% := 1;
+        case ok% = 2 then
+            finished% := 1;
+        case ok% = 3 then
+            doTwitchAnalysis%();
+            finished% := 0;
+        else
+            finished% := 0;
+        endcase
+    until finished%;
+    
+    return 1;
+end
+
+proc createTwitchCursors(forceChan%, &twitchBaselineHCur%, &twitchPeakHCur%, &twitchHalfRelaxHCur%, &twitchStartCur%, &twitchEndCur%, &twitchPeakCur%, &twitchHalfRelaxCur%)
+    HCursorDelete(-1);
+    CursorDelete(-1);
+    
+    twitchBaselineHCur% := HCursorNew(forceChan%, twitchBaseline);
+    twitchPeakHCur% := HCursorNew(forceChan%, twitchPeak);
+    twitchHalfRelaxHCur% := HCursorNew(forceChan%, twitchBaseline+twitchAmpl/2);
+    twitchStartCur% := CursorNew(XToBin(twitchStartTime));
+    twitchEndCur% := CursorNew(XToBin(twitchEndTime));
+    twitchPeakCur% := CursorNew(XToBin(twitchPeakTime));
+    twitchHalfRelaxCur% := CursorNew(XToBin(twitchHalfRelaxTime));
+end
+
+func doTwitchAnalysis%()
+    if Cursor(twitchStartCur%)<>XToBin(twitchStartTime) then
+        twitchStartTime := BinToX(Cursor(twitchStartCur%));
+    endif
+    
+    if Cursor(twitchEndCur%)<>XToBin(twitchEndTime) then
+        twitchEndTime := BinToX(Cursor(twitchEndCur%));
+    endif
+    
+    if Cursor(twitchPeakCur%)<>XToBin(twitchPeakTime) then
+        twitchPeakTime := BinToX(Cursor(twitchPeakCur%));
+    endif
+    
+    if Cursor(twitchHalfRelaxCur%)<>XToBin(twitchHalfRelaxTime) then
+        twitchHalfRelaxTime := BinToX(Cursor(twitchHalfRelaxCur%));
+    endif
+    
+    doTwitchMeasures(spikeTime, twitchStartTime, twitchEndTime, twitchPeakTime, twitchHalfRelaxTime);
+    updateTwitchCursors(forceChan%, twitchBaselineHCur%, twitchPeakHCur%, twitchHalfRelaxHCur%, twitchStartCur%, twitchEndCur%, twitchPeakCur%, twitchHalfRelaxCur%);
+    return 1;
+end
+
+proc updateTwitchCursors(forceChan%, twitchBaselineHCur%, twitchPeakHCur%, twitchHalfRelaxHCur%, twitchStartCur%, twitchEndCur%, twitchPeakCur%, twitchHalfRelaxCur%);
+    HCursor(twitchBaselineHCur%, twitchBaseline, forceChan%);
+    HCursorLabel(0, twitchBaselineHCur%);
+    
+    HCursor(twitchPeakHCur%, twitchPeak, forceChan%);
+    HCursorLabel(4, twitchPeakHCur%, "Ampl");
+    
+    HCursor(twitchHalfRelaxHCur%, twitchBaseline+twitchAmpl/2);
+    HCursorLabel(0,twitchHalfRelaxHCur%);
+    
+    Cursor(twitchStartCur%, XToBin(twitchStartTime));
+    CursorLabel(4, twitchStartCur%, "delay");
+    
+    Cursor(twitchEndCur%, XToBin(twitchEndTime));
+    CursorLabel(4, twitchEndCur%, "duration");
+    
+    Cursor(twitchPeakCur%, XToBin(twitchPeakTime));
+    CursorLabel(4, twitchPeakCur%, "T2P");
+    
+    Cursor(twitchHalfRelaxCur%, XToBin(twitchHalfRelaxTime));
+    CursorLabel(4, twitchHalfRelaxCur%, "1/2 relax");
+end
+
+proc doTwitchMeasures(spikeTime, twitchStartTime, twitchEndTime, twitchPeakTime, twitchHalfRelaxTime)
+    twitchDelay := (twitchStartTime-spikeTime)*1e3;
+    twitchDuration := (twitchEndTime-twitchStartTime)*1e3;
+    twitchT2P := (twitchPeakTime-twitchStartTime)*1e3;
+    twitchHalfRelax := (twitchHalfRelaxTime-twitchPeakTime)*1e3;
+    twitchPeak := view(0,forceChan%).[XToBin(twitchPeakTime)];
+    twitchAmpl := twitchPeak-twitchBaseline;
+    twitchArea := ChanMeasure(forceChan%, 7, twitchStartTime, twitchEndTime)*1e3;
+    didTwitch% := 1;
+end
+
+func estimateTwitchStartTime(forceChan%, spikeTime)
+    var result;
+    var twitchAmpl;
+    result := XToBin(spikeTime);
+    twitchBaseline := ChanMeasure(forceChan%, 2, BinToX(0), spikeTime);
+    twitchAmpl := ChanMeasure(forceChan%, 10, spikeTime, BinToX(MaxTime(forceChan%)));
+    'search for threshold crossing in the + direction
+    result := ChanSearch(forceChan%, 7, XToBin(spikeTime), MaxTime(forceChan%), twitchBaseline+(1-TWITCHSTARTENDCRITERIA)*TwitchAmpl);
+    return BinToX(result);
+end
+
+func estimateTwitchEndTime(forceChan%, spikeTime)
+    var result;
+    var twitchAmpl;
+    result := XToBin(spikeTime);
+    twitchBaseline := ChanMeasure(forceChan%, 2, BinToX(0), spikeTime);
+    twitchAmpl := ChanMeasure(forceChan%, 10, spikeTime, BinToX(MaxTime(forceChan%)));
+    'search for threshold crossing in the + direction
+    result := ChanSearch(forceChan%, 7, MaxTime(forceChan%), XToBin(spikeTime), twitchBaseline+(1-TWITCHSTARTENDCRITERIA)*TwitchAmpl);
+    return BinToX(result);
+end
+
+func estimateTwitchPeakTime(forceChan%, spikeTime)
+    var result;
+    twitchBaseline := ChanMeasure(forceChan%, 2, BinToX(0), spikeTime);
+    result := ChanSearch(forceChan%, 3, XToBin(spikeTime), MaxTime(forceChan%), twitchBaseline);
+    return BinToX(result);
+end
+
+func estimateTwitchHalfRelaxTime(forceChan%, spikeTime)
+    var result;
+    var twitchAmpl, twitchPeakTime;
+    result := XToBin(spikeTime);
+    twitchBaseline := ChanMeasure(forceChan%, 2, BinToX(0), spikeTime);
+    twitchAmpl := ChanMeasure(forceChan%, 10, spikeTime, BinToX(MaxTime(forceChan%)));
+    twitchPeakTime := estimateTwitchPeakTime(forceChan%, spikeTime);
+    'search for threshold crossing in the - direction
+    result := ChanSearch(forceChan%, 8, XToBin(twitchPeakTime), MaxTime(forceChan%), twitchBaseline+TwitchAmpl/2);
+    return BinToX(result);
+end

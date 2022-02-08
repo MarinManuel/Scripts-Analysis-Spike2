@@ -1,0 +1,14 @@
+'analysis_MarcoProtocol.s2s
+#include "analysis_MarcoProtocol_incl.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then view(App(3)).WindowVisible(0); endif
+
+var vh% := view();
+if ViewKind(vh%) <> 4 then
+    Message("ERROR: this script must be run on a result view");
+    halt
+endif
+analyzeRecInh(vh%);
+
+

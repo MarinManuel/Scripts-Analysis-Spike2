@@ -1,0 +1,292 @@
+'#### analysis_ForceFreq_ramp.s2s
+'#### Marin Manuel
+'# this script performs an off-line analysis on a Current clamp ramp data
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+#include "includes/incl_IFcurve.s2s"
+#include "includes/incl_forceFunctions.s2s"
+
+const LogFormat$:=" %-60s  |%s\n";
+const VrPeriod := 100e-3;
+
+var dataHdl%,ifHdl%;
+var currentFolder$;
+var dataFileName$;
+var name$,expNum%,cellNum%,fileNum%;
+var forceDelay := 10.00e-3;
+var rampStart,rampStop;
+var ok%;
+
+dataHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+FrontView(dataHdl%);
+
+if ViewKind(dataHdl%)=0 or ViewKind(dataHdl%)=4 then 'works on data file or memory views
+    'initialize variables
+    rampStart := XLow();
+    rampStop := XHigh();
+    currentFolder$:=FileName$(1)+FileName$(2);
+    dataFileName$:=FileName$(3)+FileName$(4);
+    
+    DlgCreate("IF curve parameters");
+    DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
+    DlgChan(3,"Force Channel", 0x1+0x10+0x200);
+    DlgXValue(4,"Delay between spike and peak force (s)");
+    DlgXValue(5,"Start analysis at");
+    DlgXValue(6,"  End analysis at");
+    ok%:=DlgShow(VmChan%,ImChan%, forceChan%,forceDelay,rampStart,rampStop);
+    if ok% then
+        'analysis
+        var IFCurveHdl%,forceFreqCurveHdl%,forceCurrentCurveHdl%;
+        var ascSlope,descSlope,globalSlope;
+        var fISI,lISI,Ion,Ioff;
+        var Vthr,Vr;
+        
+        'try to measure the RMP
+        'we don't have any info on the beginning of the ramp, so we're looking for the label in the Notes
+        'we're betting that the beginning is out of the window if we've zoomed in around the spikes
+        'if we haven't soomed in, either we find a tag before, or no tag at all.
+        var beginRamp := LastTime(30, XLow());
+        if beginRamp<0 then 'not tag found
+            beginRamp := VrPeriod;
+        endif
+        Vr := ChanMeasure(VmChan%, 2, beginRamp-VrPeriod, beginRamp);
+            
+        
+        freqChan%:=createFreqChan%(VmChan%,rampStart,rampStop);
+        DrawMode(freqChan%,7,4);
+        Optimise(freqChan%);
+        ChanShow(freqChan%);
+        view(dataHdl%);
+        IFCurveHdl% := doIFCurve%(freqChan%,ImChan%,rampStart,rampStop);
+        view(dataHdl%);        
+        forceFreqCurveHdl%:=doForceFreqCurve%(freqChan%,ImChan%,ForceChan%,forceDelay,rampStart,rampStop);
+        view(dataHdl%);        
+        forceCurrentCurveHdl%:=doForceCurrentCurve%(freqChan%,ImChan%,ForceChan%,forceDelay,rampStart,rampStop);
+        if IFCurveHdl%>0 and forceFreqCurveHdl%>0 and forceCurrentCurveHdl%>0 then
+            placeResults(dataHdl%,forceFreqCurveHdl%,1,3);
+            placeResults(dataHdl%,IFCurveHdl%,2,3);
+            placeResults(dataHdl%,forceCurrentCurveHdl%,3,3);
+            
+            'make sure the current scale for IFCurve and forceCurrentCurve are the same
+            view(forceCurrentCurveHdl%).XRange(view(IFCurveHdl%).XLow(),view(IFCurveHdl%).XHigh());
+            
+            'save
+            FilePathSet(currentFolder$);
+            view(forceFreqCurveHdl%).FileSaveAs(dataFileName$+"_ForceFreq_Curve.sxy",-1,0,"Choose name");
+            view(IFCurveHdl%).FileSaveAs(dataFileName$+"_IFCurve.sxy",-1,0,"Choose name");
+            view(forceCurrentCurveHdl%).FileSaveAs(dataFileName$+"_ForceCurrent_Curve.sxy",-1,0,"Choose name");
+            
+            'do some analysis
+            
+            'Analyse IFCurve
+            getIFCurveSlopeValues(IFCurveHdl%,ascSlope,descSlope,globalSlope);
+            getIFCurveFreqValues(IFCurveHdl%,fISI,lISI);
+            getIFCurveCurrentValues(IFCurveHdl%,Ion,Ioff);
+            var dummy;
+            Vthr:=view(dataHdl%).getSpikeThreshold(VmChan%,view(dataHdl%).NextTime(freqChan%,rampStart),dummy);
+            
+            view(dataHdl%).HCursorDelete(-1);
+            var tempCur1%,tempCur2%,tempCur3%;
+            tempCur1%:=view(dataHdl%).HCursorNew(ImChan%,Ion);
+            if tempCur1%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur1%,"Ion: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur1%,0.0);
+            endif
+            
+            tempCur2%:=view(dataHdl%).HCursorNew(ImChan%,Ioff);
+            if tempCur2%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur2%,"Ioff: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur2%,100.0); 
+            endif  
+            
+            tempCur3%:=view(dataHdl%).HCursorNew(VmChan%,Vthr);
+            if tempCur3%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur3%,"Vthr: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur3%,0.0); 
+            endif
+            
+            PrintLog("%s %s - %s\n",Date$(2,2,3,3,"/"),Time$(1,1+2,3,":"),dataFileName$);
+            PrintLog("%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n","Ion","Ioff","deltaI","deltaF","ascSlope","descSlope","globalSlope","Vthr");
+            PrintLog("%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\t%s\n",Vr,Ion,Ioff,Ioff-Ion,lISI-fISI,ascSlope,descSlope,globalSlope,Vthr,dataFileName$);
+            
+            
+            'analyse force-freq curve
+            view(forceFreqCurveHdl%);
+            ChanFit(2,0,0); 'clear all fits
+            ChanFit(2,5,1); 'initialize Sigmoid fit
+            ChanFit(2,1+2,XLow(),XHigh(),0.0);
+            
+            var tff,maxForce,fracFreq,fracForce;
+            getForceValuesOnForceFreqCurve(forceFreqCurveHdl%,0.90,maxForce,tff,fracForce,fracFreq);
+            
+       endif
+    endif
+endif
+
+func doForceFreqCurve%(freqChan%,ImChan%,forceChan%,delay,startTime,endTime)
+    var dataHdl%,IFCurveHdl%;
+    var nbSpikes%,nbAscSpikes%;
+    var middleTime;
+    var i%;
+    var minX,maxX,minY,maxY,marginX,marginY;
+    
+    dataHdl%:=view();
+    
+    'find the time of the top of the ramp
+    middleTime:=ChanSearch(ImChan%,1,startTime,endTime);
+    if middleTime<0 then
+        'Error: could not find the maximum current intensity
+        return -1;
+    endif
+    
+    'get the total number of spikes
+    nbSpikes%:=Count(freqChan%,startTime,endTime);
+    'get the number of spikes on the ascending branch
+    nbAscSpikes%:=Count(freqChan%,startTime,middleTime);
+    if nbSpikes%<2 then
+        'Error: we need at least 2 spikes to cal a freq
+        return -1;
+    endif
+    
+    var spikeTimes[nbSpikes%];
+    var spikeFreqs[nbSpikes%];
+    var forceValues[nbSpikes%];
+    var coefs[3];
+    coefs[0]:=-1;
+    coefs[1]:=1;
+    coefs[2]:=0;
+    
+    ChanData(freqChan%,spikeTimes[],startTime,endTime);
+    ArrConst(spikeFreqs[],spikeTimes[]);
+    ArrFilt(spikeFreqs[],coefs[]);
+    ArrDivR(spikeFreqs[],1);
+    for i%:=0 to nbSpikes%-1 do
+        forceValues[i%]:=ChanValue(forceChan%,spikeTimes[i%]+delay);
+    next
+    
+    IFCurveHdl% := FileNew(12,0);
+    if IFCurveHdl%<=0 then
+        Message("Error: impossible to create result files");
+        return -3;
+    endif
+    
+    IFCurveAscChan%:=XYSetChan(0,0,0,1,16);
+    IFCurveDescChan%:=XYSetChan(1,0,0,1,24);
+    IFCurveHiddenChan%:=XYSetChan(0,0,0,1,30);
+    XYDrawMode(-1,5,1);
+    XRange(0,1);
+    
+    XYAddData(IFCurveAscChan%,spikeFreqs[1:nbAscSpikes%-1],forceValues[1:nbAscSpikes%-1]);
+    if nbAscSpikes%<nbSpikes% then
+        XYAddData(IFCurveDescChan%,spikeFreqs[nbAscSpikes%:],forceValues[nbAscSpikes%:]);
+    endif
+    XYAddData(IFCurveHiddenChan%,spikeFreqs[],forceValues[]);
+    
+    ChanHide(IFCurveHiddenChan%);
+    ChanTitle$(IFCurveAscChan%,"Asc.");
+    ChanTitle$(IFCurveDescChan%,"Desc.");
+    ChanTitle$(IFCurveHiddenChan%,"All");
+    ChanTitle$(0,view(dataHdl%).ChanTitle$(forceChan%));
+    ChanUnits$(0,view(dataHdl%).ChanUnits$(forceChan%));
+    XTitle$(view(dataHdl%).ChanTitle$(freqChan%));
+    XUnits$(view(dataHdl%).ChanUnits$(freqChan%));
+    XYKey(1,1); 'key shown
+    XYKey(2,1); 'key background transparent
+    XYKey(3,0); 'key border hidden
+    XYKey(4,100); 'key x-pos - right
+    XYKey(5,100); 'key y-pos - bottom
+    XYRange(-2,minX,minY,maxX,maxY);
+    marginX:=abs(maxX-minX)/10;
+    XRange(minX-marginX,maxX+marginX);
+    Optimise(-1);
+    
+    return IFCurveHdl%;
+end
+
+func doForceCurrentCurve%(freqChan%,ImChan%,forceChan%,delay,startTime,endTime)
+    var dataHdl%,IFCurveHdl%;
+    var nbSpikes%,nbAscSpikes%;
+    var middleTime;
+    var i%;
+    var minX,maxX,minY,maxY,marginX,marginY;
+    
+    dataHdl%:=view();
+    
+    'find the time of the top of the ramp
+    middleTime:=ChanSearch(ImChan%,1,startTime,endTime);
+    if middleTime<0 then
+        'Error: could not find the maximum current intensity
+        return -1;
+    endif
+    
+    'get the total number of spikes
+    nbSpikes%:=Count(freqChan%,startTime,endTime);
+    'get the number of spikes on the ascending branch
+    nbAscSpikes%:=Count(freqChan%,startTime,middleTime);
+    if nbSpikes%<2 then
+        'Error: we need at least 2 spikes to cal a freq
+        return -1;
+    endif
+    
+    var spikeTimes[nbSpikes%];
+    var spikeFreqs[nbSpikes%];
+    var forceValues[nbSpikes%];
+    var currValues[nbSpikes%];
+    
+    
+    ChanData(freqChan%,spikeTimes[],startTime,endTime);
+    
+    for i%:=0 to nbSpikes%-1 do
+        forceValues[i%]:=ChanValue(forceChan%,spikeTimes[i%]+delay);
+        'current value is smoothed because of high level of noise with Axoclamp-2A
+        currValues[i%]:=ChanMeasure(ImChan%,2,spikeTimes[i%]-IFCurveCurrentSmoothTimeConstant/2,spikeTimes[i%]+IFCurveCurrentSmoothTimeConstant/2);
+    next
+    
+    IFCurveHdl% := FileNew(12,0);
+    if IFCurveHdl%<=0 then
+        Message("Error: impossible to create result files");
+        return -3;
+    endif
+    
+    IFCurveAscChan%:=XYSetChan(0,0,0,1,16);
+    IFCurveDescChan%:=XYSetChan(1,0,0,1,24);
+    IFCurveHiddenChan%:=XYSetChan(0,0,0,1,30);
+    XYDrawMode(-1,5,1);
+    XRange(0,1);
+    
+    XYAddData(IFCurveAscChan%,currValues[1:nbAscSpikes%-1],forceValues[1:nbAscSpikes%-1]);
+    if nbAscSpikes%<nbSpikes% then
+        XYAddData(IFCurveDescChan%,currValues[nbAscSpikes%:],forceValues[nbAscSpikes%:]);
+    endif
+    XYAddData(IFCurveHiddenChan%,currValues[],forceValues[]);
+    
+    ChanHide(IFCurveHiddenChan%);
+    ChanTitle$(IFCurveAscChan%,"Asc.");
+    ChanTitle$(IFCurveDescChan%,"Desc.");
+    ChanTitle$(IFCurveHiddenChan%,"All");
+    ChanTitle$(0,view(dataHdl%).ChanTitle$(forceChan%));
+    ChanUnits$(0,view(dataHdl%).ChanUnits$(forceChan%));
+    XTitle$(view(dataHdl%).ChanTitle$(ImChan%));
+    XUnits$(view(dataHdl%).ChanUnits$(ImChan%));
+    XYKey(1,1); 'key shown
+    XYKey(2,1); 'key background transparent
+    XYKey(3,0); 'key border hidden
+    XYKey(4,100); 'key x-pos - right
+    XYKey(5,100); 'key y-pos - bottom
+    XYRange(-2,minX,minY,maxX,maxY);
+    marginX:=abs(maxX-minX)/10;
+    XRange(minX-marginX,maxX+marginX);
+    Optimise(-1);
+    
+    return IFCurveHdl%;
+end
+
+
+
+

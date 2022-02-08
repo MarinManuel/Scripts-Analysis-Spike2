@@ -1,0 +1,674 @@
+'#### analysis_IFcurve_pulse.s2s
+'#### Marin Manuel
+'# this script performs an off-line analysis on a Current Clamp pulses data
+'# and plots: 1stISI, stationnary frequency, and SFA
+'# SFA = 1stISI freq / SS freq
+'#
+'# the results are output to the log file
+'# Rheobase    1stISI@2xRh    ssf@2xRh    sfa@2xRh    1stISI@3xRh    ssf@3xRh    sfa@3xRh    pValue    filename
+
+
+
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_IFcurve.s2s"
+#include "includes/incl_forceFunctions.s2s"
+#include "includes/incl_mathFunctions.s2s"
+
+const PYTHONPATH$ := "C:/Python27/python.exe";
+
+var dataHdl%,ifHdl%,sfaHdl%,isiTextHdl%:=-1,ssfTextHdl%:=-1;
+var currentFolder$;
+var dataFileName$;
+
+var startTime:=0.0,endTime;
+var doCreateFreqChan%;
+var doFilterPulses%:=1;
+var statFreqPercent%:=50;
+var doMeanIFCurve% := 1;
+var lvlChan% := comOutChan%;
+var doNxThresholdMeasurement% := 1;
+var rheoValue;
+
+const nbSlices% := 4;
+const tolerance := 0.05; '5%
+const DEFAULTVIEWMARGINS := 0.10; 'view will be pulse +/- DEFAULTVIEWMARGINS
+
+const ISIXYCHAN% := 1;
+const SSFXYCHAN% := 2;
+const SFAXYCHAN% := 1;
+
+var ok%,dummy%;
+var dummyMemChan%;
+
+var pulseChan%;
+var pulseDuration := 0.5; 's
+
+var results[8];
+
+dataHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+FrontView(dataHdl%);
+
+if ViewKind(dataHdl%)=0 then 'works on data file
+    'initialize variables
+    currentFolder$:=FileName$(1)+FileName$(2);
+    dataFileName$:=FileName$(3)+FileName$(4);
+    startTime := XLow();
+    endTime := XHigh();
+    
+    'create a new memory channel in case we want to autogenerate the inst. frequency channel
+    dummyMemChan% := MemChan(3);
+    ChanTitle$(dummyMemChan%,"New Chan...");
+    freqChan% := dummyMemChan%;
+    
+    DlgCreate("IF curve parameters");
+    DlgChan(1, "Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2, "Injected Current Channel", 0x1+0x10+0x200);
+    DlgChan(3, "Inst. freq. Channel", 0x2+0x8+0x10+0x20+0x40);
+    DlgChan(4, "ComOut Channel", 0x2+0x4+0x8+0x20); '#FIXME
+    DlgCheck(5, "Filter pulses for change in current amplitude");
+    
+    DlgXValue(7,"Start analysis at");
+    DlgXValue(8,"  End analysis at");
+    
+    DlgInteger(10,"Time period from end of pulse for SSF (%)",0,100,0,0,5);
+    DlgCheck(11, "Plot Mean +/- SD IF curve");
+    DlgCheck(12, "Rheobase known?");
+    DlgReal(13, "Rheobase",0.0,Inf,0,0,1.0);
+    
+    DlgAllow(0,0,ifParamsChanged%);
+    ok%:=DlgShow(VmChan%,ImChan%,freqChan%,lvlChan%,doFilterPulses%,dummy%,
+    startTime,endTime,dummy%,statFreqPercent%,doMeanIFCurve%,doNxThresholdMeasurement%,rheoValue);
+    if ok% then
+        ChanDelete(dummyMemChan%);
+        if freqChan%=dummyMemChan% then 'user selected "New Chan..." item
+            freqChan%:=createFreqChan%(VmChan%,startTime,endTime);
+            if freqChan%<=0 then
+                Message("Error: cannot create Frequency Channel");
+                halt
+            endif
+        endif
+        'make sure the freq channel is drawn as Inst Freq
+        DrawMode(freqChan%,7,4);
+        Optimise(freqChan%);
+        ChanShow(freqChan%);
+        
+        'create a level channel containing only the pulses to be taken into consideration for this analysis
+        lvlChan% := filterPulseLvlChan%(lvlChan%, startTime, endTime, doFilterPulses%);
+        
+        XRange(startTime,endTime);
+        Optimise(-1);
+        
+        doMakeMeasurements(freqChan%,ImChan%,lvlChan%,startTime,endTime,ifHdl%,sfaHdl%);
+        if ifHdl%>0 and doMeanIFCurve% then
+            isiTextHdl% := makeMeanIFCurve(ifHdl%, ISIXYCHAN%, 0.01);
+            ssfTextHdl% := makeMeanIFCurve(ifHdl%, SSFXYCHAN%, 0.01);
+        endif
+        doSFAAnalysis(sfaHdl%);
+        
+        doMeasureNxThreshold(rheoValue,ifHdl%,sfaHdl%,results[]);
+        
+        doPlaceWindows();
+        view(ifHdl%).XYOptimise(-1);
+        view(sfaHdl%).XYOptimise(-1);
+        doPrintResults(isiTextHdl%,ssfTextHdl%,sfaHdl%);
+    endif
+endif
+
+func ifParamsChanged%(item%)
+    docase
+    case item%=0 then 'first call
+        ifParamsChanged%(11); 'update state of items as below
+        ifParamsChanged%(12);
+    case item%=11 then
+        if not DlgValue(11) then
+            DlgValue(12,DlgValue(11)); 'if we uncheck 'do mean+/-SD box, then we cannot do the rheobase stuff
+            ifParamsChanged%(12);
+        endif
+    case item%=12 then
+        DlgEnable(DlgValue(12),13); 'activate rheobase DlgReal if checkbox is checked, and vice vers
+        if DlgValue(12) then
+            DlgValue(11,DlgValue(12)); 'if we check that 'rheboase is known' then we need to do mean+/-SD
+            ifParamsChanged%(11);
+        endif
+    endcase
+    return 1;
+end
+
+proc doMakeMeasurements(freqChan%,ImChan%,lvlChan%,startTime,endTime,&tempIFHdl%,&tempSFAHdl%)
+    var pulseOnset,pulseOffset;
+    var isiFreqValue:=-1,ssFreqValue:=-1,sfaValue:=-1,iValue:=-1;
+    var isiTime;
+    var pulseDuration;
+    
+    'create XY windows
+    tempIFHdl% := FileNew(12);
+    tempSFAHdl% := FileNew(12);
+    if tempIFHdl%<0 or tempSFAHdl%<0 then
+        PrintLog("ERROR in analysis_SFA.s2s (function doMakeMeasurements()):");
+        PrintLog(Error$(tempIFHdl%));
+        PrintLog(Error$(tempSFAHdl%));
+        return
+    endif
+    'create channels
+    view(tempIFHdl%);
+    XYSetChan(0); 'create channel 2 as SSFXYCHAN%
+    ChanTitle$(ISIXYCHAN%,"1st ISI");
+    ChanColourSet(ISIXYCHAN%,1,1,0,0);   'Set channel colour to red
+    ChanTitle$(SSFXYCHAN%,"SSF");
+    ChanColourSet(SSFXYCHAN%,1,0,0,0.75);   'Set channel colour to dark blue
+    XYKey(1,1); 'show the key
+    XYJoin(-1,0); 'disconnect the points
+    view(tempSFAHdl%);
+    ChanTitle$(SFAXYCHAN%,"SFA index");
+    XYKey(1,1); 'show the key
+    XYJoin(-1,0); 'disconnect the points
+    
+    view(dataHdl%);
+    pulseOnset := NextTime(lvlChan%,startTime);
+    pulseOffset := NextTime(lvlChan%,pulseOnset);
+    while pulseOnset>0 and pulseOffset>0 and pulseOnset<=endTime and pulseOffset<=endTime do
+        
+        '## STEP 1: 1st ISI
+        'the first ISI freq corresponds to the second spike (i.e. second event from the start of the pulse)
+        'UNLESS we're looking at the very first spike from the file, in which case there were no data to calculate
+        'the inst freq of the first spike and the 1st ISI is therefore the FIRST event.
+        'to account for this, we'll count the number of events before the beginning of the pulse,
+        'if 0 then take the value of the FIRST freq
+        'otherwise, take the value of the SECOND freq
+        isiTime := NextTime(freqChan%,pulseOnset);
+        if ChanMeasure(freqChan%,4,-1,pulseOnset)>0 then
+            'we've had event before the spike onset, we need to take the value of the second event
+            isiTime := NextTime(freqChan%,isiTime);
+        else
+            'there were no event before, take the value of the FIRST freq event
+            '(which was done before the test, so do nothing)
+        endif
+        isiFreqValue := ChanValue(freqChan%,isiTime);
+        
+        '## STEP 2: Steady-State Frequency
+        pulseDuration := pulseOffset-pulseOnset;
+        ssFreqValue := ChanMeasure(freqChan%,2,pulseOffset-(statFreqPercent%/100.0)*pulseDuration,pulseOffset);
+        
+        '## STEP 4: Current Value
+        iValue := ChanMeasure(ImChan%,2,pulseOnset,pulseOffset);
+        
+        '## STEP 5: SFA
+        if isiFreqValue>0 and ssFreqValue>0 then
+            sfaValue := isiFreqValue / ssFreqValue;
+        endif
+        
+        '## STEP 6: add data to XY views
+        if isiFreqValue>0 then
+            view(tempIFHdl%).XYAddData(ISIXYCHAN%,iValue,isiFreqValue);
+        endif
+        if ssFreqValue>0 then
+            view(tempIFHdl%).XYAddData(SSFXYCHAN%,iValue,ssFreqValue);
+        endif
+        if sfaValue>0 then
+            view(tempSFAHdl%).XYAddData(SFAXYCHAN%,iValue,sfaValue);
+        endif
+        
+        
+        'end of processing, find next pulse and loop around
+        pulseOnset := NextTime(lvlChan%,pulseOffset);
+        pulseOffset := NextTime(lvlChan%,pulseOnset);
+    wend
+end
+
+proc doPlaceWindows()
+    '
+    'organize the windows
+    '
+    
+    'reset the display of the data file
+    XRange(startTime, endTime);
+    
+    var nbResultViews% := 0;
+    var currentResultView%;
+    if ifHdl% > 0 then
+        nbResultViews% += 1;
+    endif
+    if sfaHdl%>0 then
+        nbResultViews% += 1;
+    endif
+    
+    if ifHdl% > 0 then
+        currentResultView% += 1;
+        view(ifHdl%);
+        placeResults(dataHdl%,ifHdl%,currentResultView%,nbResultViews%);
+    endif
+    
+    if sfaHdl%>0 then
+        currentResultView% += 1;
+        view(sfaHdl%);
+        placeResults(dataHdl%,sfaHdl%,currentResultView%,nbResultViews%);
+    endif
+    
+    FrontView(dataHdl%);
+end
+
+proc doSFAAnalysis(tempSFAHdl%)
+    'this function creates a linear regression of SFA vs I and test whether the slope of the regression is <> 0
+    view(tempSFAHdl%);
+    ChanFit(SFAXYCHAN%,0,0); 'clear any fit
+    ChanFit(SFAXYCHAN%,2,1); '1st Order Polynomoial
+    ChanFit(SFAXYCHAN%,1,XLow(),XHigh(),0.0); 'run the fit
+    ChanFitShow(SFAXYCHAN%,1,XLow(),XHigh());
+    
+    'use a helper script to do the work
+    '#### this requires python, numpy, scipy
+    'save the SFA data in a temp file
+    var tempFileName$ := tmpPath$+Date$(2,2,1,3,"-")+"-"+Time$(1,1+2+4,3,"-")+"-"+Print$("%06d",Rand(1000000,0));
+    FileSaveAs(tempFileName$+".dat",1);
+    var cmd$,cmdResult%;
+    cmd$ := Print$("%s \"%sanalysis_SFA_slope.py\" \"%s.dat\"",PYTHONPATH$,scriptPath$,tempFileName$);
+    cmdResult% := ProgRun(cmd$,1);
+    while ProgStatus(cmdResult%) = 1 do
+        Yield();
+    wend;
+    if cmdResult% < 0 then
+        Message("Impossible to run external script");
+    endif
+    
+    var resFileHdl%;
+    var pValue := -1;
+    resFileHdl% := FileOpen(tempFileName$+".res",8); 'open the result file
+    if resFileHdl%>0 then
+        Read(pValue);
+        FileClose();
+    else
+        Message("ERROR while opening external script result file:"+Error$(resFileHdl%));
+    endif
+    'delete temp files
+    FileDelete(tempFileName$+".dat");
+    FileDelete(tempFileName$+".res");
+    
+    view(dataHdl%);
+    
+    'puts the pValue in the results array
+    results[7] := pValue;
+end
+
+
+proc linregress(xArr[],yArr[],&results[])
+    'this is a conversion of the linregress function from scipy
+    'extracted from scipy.stats.linregress in scipy v. 0.14.1rc1
+    '
+    'takes two input arrays (must have the same dimension)
+    'and return five values in an array as such:
+    'results[0] -> slope (slope of the regression line)
+    'results[1] -> intercept (intercept of the regression line)
+    'results[2] -> r-value (correlation coefficient)
+    'results[3] -> p-value (two-sided p-value for a hypothesis test whose null hypothesis is
+    '                       that the slope is zero.)
+    'results[4] -> stderr (Standard error of the estimate)
+    
+    
+    
+    
+    '    def linregress(x, y=None):
+    '    """
+    '    Calculate a regression line
+    '
+    '    This computes a least-squares regression for two sets of measurements.
+    '
+    '    Parameters
+    '    ----------
+    '    x, y : array_like
+    '        two sets of measurements.  Both arrays should have the same length.
+    '        If only x is given (and y=None), then it must be a two-dimensional
+    '        array where one dimension has length 2.  The two sets of measurements
+    '        are then found by splitting the array along the length-2 dimension.
+    '
+    '    Returns
+    '    -------
+    '    slope : float
+    '        slope of the regression line
+    '    intercept : float
+    '        intercept of the regression line
+    '    r-value : float
+    '        correlation coefficient
+    '    p-value : float
+    '        two-sided p-value for a hypothesis test whose null hypothesis is
+    '        that the slope is zero.
+    '    stderr : float
+    '        Standard error of the estimate
+    '
+    '
+    '    Examples
+    '    --------
+    '    >>> from scipy import stats
+    '    >>> import numpy as np
+    '    >>> x = np.random.random(10)
+    '    >>> y = np.random.random(10)
+    '    >>> slope, intercept, r_value, p_value, std_err = stats.linregress(x,y)
+    '
+    '    # To get coefficient of determination (r_squared)
+    '
+    '    >>> print "r-squared:", r_value**2
+    '    r-squared: 0.15286643777
+    '
+    '    """
+    '    TINY = 1.0e-20
+    '    if y is None:  # x is a (2, N) or (N, 2) shaped array_like
+    '        x = asarray(x)
+    '        if x.shape[0] == 2:
+    '            x, y = x
+    '        elif x.shape[1] == 2:
+    '            x, y = x.T
+    '        else:
+    '            msg = "If only `x` is given as input, it has to be of shape (2, N) \
+    '            or (N, 2), provided shape was %s" % str(x.shape)
+    '            raise ValueError(msg)
+    '    else:
+    '        x = asarray(x)
+    '        y = asarray(y)
+    '    n = len(x)
+    '    xmean = np.mean(x,None)
+    '    ymean = np.mean(y,None)
+    '
+    '    # average sum of squares:
+    '    ssxm, ssxym, ssyxm, ssym = np.cov(x, y, bias=1).flat
+    '    r_num = ssxym
+    '    r_den = np.sqrt(ssxm*ssym)
+    '    if r_den == 0.0:
+    '        r = 0.0
+    '    else:
+    '        r = r_num / r_den
+    '        # test for numerical error propagation
+    '        if (r > 1.0):
+    '            r = 1.0
+    '        elif (r < -1.0):
+    '            r = -1.0
+    '
+    '    df = n-2
+    '    t = r*np.sqrt(df/((1.0-r+TINY)*(1.0+r+TINY)))
+    '    prob = distributions.t.sf(np.abs(t),df)*2
+    '    slope = r_num / ssxm
+    '    intercept = ymean - slope*xmean
+    '    sterrest = np.sqrt((1-r*r)*ssym / ssxm / df)
+    '    return slope, intercept, r, prob, sterrest
+    
+    const TINY := 1.0e-20;
+    var nbPoints%;
+    if len(xArr[]) <> len(yArr[]) then
+        Message("ERROR in function linregress: x and y inputs must have the same length");
+        return
+    endif
+    
+    if len(results[])<5 then
+        Message("ERROR in function linregress: results array must be at least of size 5");
+        return
+    endif
+    
+    var n% := len(xArr[]);
+    var xmean, ymean;
+    ArrSum(xArr[], xmean);
+    ArrSum(yArr[], ymean);
+
+    'average sum of squares:
+    
+end
+
+
+
+
+func filterPulseLvlChan%(lvlChan%, startT, endT, doFilter%)
+    var tempChan%;
+    var equal%;
+    var meanVal;
+    var stepSize;
+    var pos;
+    var testVal;
+    var diff;
+    var autoAccept% := 0;
+    
+    tempChan% := MemChan(4);
+    if tempChan%<0 then
+        Message("ERROR: could not create memory channel:\n"+Error$(tempChan%));
+        return -1;
+    endif
+    
+    MemImport(tempChan%,lvlChan%,startT,endT);
+    ChanTitle$(tempChan%,ChanTitle$(lvlChan%));
+    
+    var pulseStart, pulseStop, pulseDir;
+    pulseStart := startT;
+    pulseStop  := startT;
+    pulseStart := NextTime(tempChan%,pulseStop,pulseDir);
+    pulseStop := NextTime(tempChan%,pulseStart);
+    while pulseStart>0 and pulseStop>0 and pulseStart<endT do
+        if pulseDir=0 and pulseStart>0 then 'low to high
+            pulseDuration := pulseStop-pulseStart;
+            equal% := 1;
+            if doFilter% then
+                meanVal := ChanMeasure(ImChan%,2,pulseStart,pulseStop);
+                stepSize := (1.0/nbSlices%)*pulseDuration;
+                for pos:=pulseStart to pulseStop-stepSize step stepSize do 
+                    testVal := ChanMeasure(ImChan%,2,pos,pos+stepSize);
+                    diff := abs(meanVal-testVal);
+                    if diff>tolerance then
+                        equal% := 0;
+                    endif
+                next
+                if not equal% then
+                    'delete the pulse from the event channel
+                    MemDeleteTime(tempChan%,3,pulseStart-BinSize(),pulseStop+BinSize());
+                endif
+            endif
+            if equal% and not autoAccept% then
+                'the pulse has not been rejected by the automatic filtering system
+                'and the user has not chosen to 'Accept All', so ask to validate the current pulse
+                var viewMargin;
+                viewMargin := pulseDuration*DEFAULTVIEWMARGINS;
+                XRange(pulseStart-viewMargin,pulseStop+viewMargin);
+                DlgCreate("Validate current pulse");
+                DlgText("Include this pulse in the analysis?",1,1);
+                DlgButton(0,"Cancel");
+                DlgButton(1,"Yes");
+                DlgButton(2,"Yes to ALL");
+                DlgButton(3,"No");
+                ok% := DlgShow();
+                docase
+                case ok%=0 then 'user clicked cancel
+                    ChanDelete(tempChan%,0);
+                    return -2;
+                    
+                case ok%=1 then 'user clicked YES
+                    'do nothing, just move to the next pulse
+                    
+                case ok%=2 then 'user clicked YES TO ALL
+                    autoAccept% := 1;
+                    
+                case ok%=3 then 'user clicked NO
+                    MemDeleteTime(tempChan%,3,pulseStart-BinSize(),pulseStop+BinSize());
+                endcase
+            endif
+        endif
+        
+        pulseStart := NextTime(tempChan%,pulseStop,pulseDir);
+        pulseStop := NextTime(tempChan%,pulseStart);
+    wend
+    return tempChan%;
+end
+
+proc doPrintResults(txtHdl1%,txtHdl2%,tempSFAHdl%)
+    'this function prints some results on the log window
+    'print some general information:
+    PrintLog("#### ANALYSIS IF CURVES AND SFA OF FILE %s [%.3d - %.3f]\n",dataFileName$,startTime,endTime);
+    if txtHdl1%>0 then
+        PrintLog("## 1ST ISI IF CURVE ##\n");
+        view(txtHdl1%);
+        EditSelectAll();
+        EditCopy();
+        view(LogHandle());
+        EditPaste();
+    endif
+    if txtHdl2%>0 then
+        PrintLog("## STEADY STATE FIRING IF CURVE ##\n");
+        view(txtHdl2%);
+        EditSelectAll();
+        EditCopy();
+        view(LogHandle());
+        EditPaste();
+    endif
+    PrintLog("## SFA ANALYSIS ##\n")
+    view(tempSFAHdl%);
+    EditCopy();
+    view(LogHandle());
+    EditPaste();
+    view(tempSFAHdl%);
+    if ChanFit(SFAXYCHAN%,-1) then 'a fit exists
+        PrintLog("LINEAR FIT: y = %.2f x + %.2f (p value for slope == 0: %.3f)\n",ChanFitCoef(SFAXYCHAN%,0),ChanFitCoef(SFAXYCHAN%,1),results[7]);
+    endif
+    PrintLog("## SPREADSHEET RESULTS ##\n");
+    PrintLog("#Rh\t1stISI@2xRh\tssf@2xRh\tsfa@2xRh\t1stISI@3xRh\tssf@3xRh\tsfa@3xRh\tpVal\n");
+    var i%;
+    for i% := 0 to 7 do
+        if results[i%]>0 then
+            PrintLog("%.3f",results[i%]);
+        endif
+        PrintLog("\t")
+    next
+    PrintLog(dataFileName$);
+    PrintLog("\n");
+end
+
+proc doMeasureNxThreshold(rheoValue,tempIFHdl%,tempSFAHdl%,&results[])
+    'this function gets the values of 1stISI freq, SSFreq and SFA at 2x and 3x rheobase current
+    'in most cases, we will not be lucky enough to have tested exactly these current values
+    'we will therefore perform a linear extrapolation between the two closest points to obtain our values
+    var rhCursor%,rh2Cursor%,rh3Cursor%;
+    var xData[2],yData[2];
+    var chan%;
+    var targetValue;
+    var nbPoints%;
+    var i%,hit%;
+    var isi2xR:=-1,ssf2xR:=-1,isi3xR:=-1,ssf3xR:=-1,sfa2xR:=-1,sfa3xR:=-1;
+    
+    
+    '### 1stISI and SSF
+    view(tempIFHdl%);
+    '##### 2x Rheobase
+    chan% := 4; 'channel containing mean value for 1stISI is chan 4
+    targetValue := 2.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        isi2xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    chan% := 6; 'channel containing mean value for ssf is chan 6
+    targetValue := 2.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        ssf2xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    '#### 3x Rheobase
+    chan% := 4; 'channel containing mean value for 1stISI is chan 4
+    targetValue := 3.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        isi3xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    chan% := 6; 'channel containing mean value for ssf is chan 6
+    targetValue := 3.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        ssf3xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    '### SFA
+    view(tempSFAHdl%);
+    '##### 2x Rheobase
+    chan% := 1; 'channel containing SFA values
+    targetValue := 2.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        sfa2xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    '#### 3x Rheobase
+    chan% := 1; 'channel containing SFA values
+    targetValue := 3.0*rheoValue;
+    nbPoints% := XYCount(chan%);
+    resize xData[nbPoints%],yData[nbPoints%];
+    i% := 0;
+    hit% := -1;
+    XYGetData(chan%,xData[],yData[]);
+    hit% := ArrFindBounding%(xData[],targetValue);
+    if hit%>0 then
+        'targetValue is between xData[hit%] and xData[hit%+1]
+        sfa3xR := linearInterpolation(targetValue,xData[hit%],yData[hit%],xData[hit%+1],yData[hit%+1]);
+    endif
+    
+    
+    
+    view(tempIFHdl%);
+    rhCursor%  := CursorNew(1.0*rheoValue);
+    rh2Cursor% := CursorNew(2.0*rheoValue);
+    rh3Cursor% := CursorNew(3.0*rheoValue);
+    CursorLabel(4,rhCursor%,"R");
+    CursorLabel(4,rh2Cursor%,"2xR");
+    CursorLabel(4,rh3Cursor%,"3xR");
+    HCursorNew(4,isi2xR);
+    HCursorNew(4,isi3xR);
+    HCursorNew(6,ssf2xR);
+    HCursorNew(6,ssf3xR);
+    view(tempSFAHdl%);
+    rhCursor%  := CursorNew(1.0*rheoValue);
+    rh2Cursor% := CursorNew(2.0*rheoValue);
+    rh3Cursor% := CursorNew(3.0*rheoValue);
+    CursorLabel(4,rhCursor%,"R");
+    CursorLabel(4,rh2Cursor%,"2xR");
+    CursorLabel(4,rh3Cursor%,"3xR");
+    HCursorNew(1,sfa2xR);
+    HCursorNew(1,sfa3xR);
+    
+    'write the results in the result array in this order
+    '# Rheobase    1stISI@2xRh    ssf@2xRh    sfa@2xRh    1stISI@3xRh    ssf@3xRh    sfa@3xRh    pValue for sfa correlated to I
+    results[0] := rheoValue;
+    results[1] := isi2xR;
+    results[2] := ssf2xR;
+    results[3] := sfa2xR;
+    results[4] := isi3xR;
+    results[5] := ssf3xR;
+    results[6] := sfa3xR;
+end
+

@@ -1,0 +1,139 @@
+' combines a bunch of result files and stackes them
+' in a time view to then be able to perform automated
+' measurements
+
+#include "includes/incl_stringFunctions.s2s"
+
+var resFiles%[100];
+var numResFiles%,numXYFiles%;
+var viewHdl%;
+var ok%;
+var chan%;
+var i%;
+var tempX[10000],tempY[10000],nbXYPoints%;
+var currFileName$;
+var currFileTitle$;
+var pos%;
+
+numResFiles% := ViewList(resFiles%[],  16+32768);
+numXYFiles%  := ViewList(resFiles%[],4096+32768);
+if numResFiles%>0 and numXYFiles%>0 then
+    Message("You must have only windows of the same time open (result or XY)");
+    halt;
+endif
+if numResFiles%=0 and numXYFiles%=0 then
+    'currently you cannot have a multiple selection open file dialog
+    '    ok% := Query("Apply on all opened result files?");
+    '    if not ok% then
+    '        FileOpen()
+    Message("You need to open all the result files first");
+    halt;
+endif;
+
+
+'peek inside the first file to
+'ask relevant questions
+view(resFiles%[1]);
+
+DlgCreate("Processing Parameters");
+DlgChan(1,"Channel to stack",0x1);
+ok% := DlgShow(chan%);
+
+if ok% and numResFiles%>0 then
+    'create a result view to get the results
+    viewHdl% := SetResult(numResFiles%,MaxTime(),BinSize(),BinToX(0),"Stacked Results",XUnits$(),ChanUnits$(chan%),XTitle$(),ChanTitle$(chan%));
+    
+    if viewHdl%<0 then
+        Message("ERROR: cannot create new result view: "+Error$(viewHdl%));
+        halt;
+    endif;
+ 
+    for i% := 1 to numResFiles% do
+        ArrConst(view(viewHdl%,i%).[],view(resFiles%[i%],chan%).[]);
+
+        currFileName$ := view(resFiles%[i%]).FileName$(3)+view(resFiles%[i%]).FileName$(4);
+        'usually, I use things past the last underscore to differenciate the result files,
+        'use that as the channel title
+        'unless there are no underscore, and in that case, use the fileName
+        if InStr(currFileName$,"_")>0 then
+            currFileTitle$ := reverseStr$(currFileName$);
+            
+            pos% := InStr(currFileTitle$,"_");
+            currFileTitle$ := Right$(currFileName$,pos%-1);
+        else
+            currFileTitle$ := currFileName$;
+        endif;
+        
+        view(viewHdl%).ChanTitle$(i%,currFileTitle$);
+        view(viewHdl%).ChanComment$(i%,currFileName$);
+        
+        'channel colors that are "colorful" start at 7
+        'the mod thing is a not very good hack to ensure valued are between 7 and 39
+        view(viewHdl%).ChanColour(i%,1,((7+i%) mod 40)<7?7+i%:(7+i%) mod 40);
+    next
+    
+    DrawMode(-1,13); 'draw as cubic spline
+    for i% := 2 to numResFiles% do
+        ChanOrder(1,0,i%); 'stack all channels
+    next
+    YAxisLock(1,1,0); 'Lock axes
+    Optimise();
+    
+    WindowVisible(1);
+endif;
+
+if ok% and numXYFiles%>0 then
+    viewHdl% := FileNew(12,0);
+    
+    if viewHdl%<0 then
+        Message("ERROR: cannot create new result view: "+Error$(viewHdl%));
+        halt;
+    endif;
+    
+    view(viewHdl%);
+    
+    ChanUnits$(0,view(resFiles%[1]).ChanUnits$(0));
+    XUnits$(view(resFiles%[1]).XUnits$());
+    XTitle$(view(resFiles%[1]).XTitle$());
+    WindowTitle$("Stacked Results");
+    XYJoin(-1,1);
+    
+    for i% := 1 to numXYFiles% do
+        if ChanKind(i%)=0 then
+            XYSetChan(0,0,0,1);
+            ChanUnits$(0,view(resFiles%[i%]).ChanUnits$(0));
+        endif
+        
+        ArrConst(tempX[],0);
+        ArrConst(tempY[],0);
+        nbXYPoints% := view(resFiles%[i%]).XYCount(chan%);
+        view(resFiles%[i%]).XYGetData(chan%,tempX[],tempY[]);
+        XYAddData(i%,tempX[:nbXYPoints%],tempY[:nbXYPoints%]);
+
+        currFileName$ := view(resFiles%[i%]).FileName$(3)+view(resFiles%[i%]).FileName$(4);
+        'usually, I use things past the last underscore to differenciate the result files,
+        'use that as the channel title
+        'unless there are no underscore, and in that case, use the fileName
+        if InStr(currFileName$,"_")>0 then
+            currFileTitle$ := reverseStr$(currFileName$);
+            pos% := InStr(currFileTitle$,"_");
+            currFileTitle$ := Right$(currFileName$,pos%-1);
+        else
+            currFileTitle$ := currFileName$;
+        endif;
+        
+        view(viewHdl%).ChanTitle$(i%,currFileTitle$);
+        'view(viewHdl%).ChanComment$(i%,currFileName$); 'no chan comments in XY views
+        
+        'channel colors that are "colorful" start at 7
+        'the mod thing is a not very good hack to ensure valued are between 7 and 39
+        view(viewHdl%).XYColour(i%,((7+i%) mod 40)<7?7+i%:(7+i%) mod 40);
+        
+        XYKey(1,1); 'make key visible
+        XYKey(4,0); 'left align
+        XYKey(5,0); 'top align
+        
+        WindowVisible(1);
+    next    
+    
+endif;

@@ -1,0 +1,642 @@
+'#### incl_IFCurve.sgs
+'#### Marin Manuel
+'# This scripts provides functions to plot an IF curve
+
+#include "incl_utilFunctions.s2s"
+
+'####
+'# change these global variables to change the comportment of the script
+const IFCurveSpikeThreshold := 10e3; 'mV/s -- 10 mV/ms
+const IFCurveSlopeMeasRange := 1e-3; 's - the range on which the slope measurment are computed
+const IFCurvePulseThreshold := 20.0; 'pA - the threshold to find the begining of current pulses
+const minAHPAmpl            :=  1.0; 'mV - the minimum amplitude of the AHP
+const IFCurveCurrentSmoothTimeConstant := 0.5e-3; 's
+const ERRWIDTHINPERCENTOFTHEXRANGE := 0.01; '1%
+
+'####
+'# start of the script
+
+'global variables
+
+'channels
+var freqChan%;
+var IFCurveAscChan%:=0;
+var IFCurveDescChan%:=1;
+var IFCurveHiddenChan%:=0;
+
+func doIFCurve%(freqChan%,ImChan%,startTime,stopTime)
+    var dataHdl%,resultHdl%;
+    var nbSpikes%,nbAscSpikes%;
+    var middleTime;
+    var i%;
+    var minX,maxX,minY,maxY,marginX,marginY;
+    
+    dataHdl%:=view();
+    
+    'find the time of the top of the ramp
+    middleTime:=ChanSearch(ImChan%,1,startTime,stopTime);
+    if middleTime<0 then
+        'Error: could not find the maximum current intensity
+        return -1;
+    endif
+    
+    'get the total number of spikes
+    nbSpikes%:=Count(freqChan%,startTime,stopTime);
+    'get the number of spikes on the ascending branch
+    nbAscSpikes%:=Count(freqChan%,startTime,middleTime);
+    if nbSpikes%<2 then
+        'Error: we need at least 2 spikes to cal a freq
+        return -1;
+    endif
+    
+    var spikeTimes[nbSpikes%];
+    var spikeFreqs[nbSpikes%];
+    var currValues[nbSpikes%];
+    var coefs[3];
+    coefs[0]:=-1;
+    coefs[1]:=1;
+    coefs[2]:=0;
+    
+    ChanData(freqChan%,spikeTimes[],startTime,stopTime);
+    ArrConst(spikeFreqs[],spikeTimes[]);
+    ArrFilt(spikeFreqs[],coefs[]);
+    ArrDivR(spikeFreqs[],1);
+    for i%:=0 to nbSpikes%-1 do
+        'current value is smoothed because of high level of noise with Axoclamp-2A
+        currValues[i%]:=ChanMeasure(ImChan%,2,spikeTimes[i%]-IFCurveCurrentSmoothTimeConstant/2,spikeTimes[i%]+IFCurveCurrentSmoothTimeConstant/2);
+    next
+    
+    resultHdl% := FileNew(12,0);
+    if resultHdl%<=0 then
+        Message("Error: impossible to create result files");
+        return -3;
+    endif
+    
+    IFCurveAscChan%:=XYSetChan(0,0,0,1,16);
+    IFCurveDescChan%:=XYSetChan(1,0,0,1,24);
+    IFCurveHiddenChan%:=XYSetChan(0,0,0,1,30);
+    XYDrawMode(-1,5,1);
+    XRange(0,1);
+    
+    XYAddData(IFCurveAscChan%,currValues[1:nbAscSpikes%-1],spikeFreqs[1:nbAscSpikes%-1]);
+    if nbAscSpikes%<nbSpikes% then
+        XYAddData(IFCurveDescChan%,currValues[nbAscSpikes%:],spikeFreqs[nbAscSpikes%:]);
+    endif
+    XYAddData(IFCurveHiddenChan%,currValues[],spikeFreqs[]);
+    
+    ChanHide(IFCurveHiddenChan%);
+    ChanTitle$(IFCurveAscChan%,"Asc.");
+    ChanTitle$(IFCurveDescChan%,"Desc.");
+    ChanTitle$(IFCurveHiddenChan%,"All");
+    ChanTitle$(0,"Frequency");
+    ChanUnits$(0,"Hz");
+    XTitle$(view(dataHdl%).ChanTitle$(ImChan%));
+    XUnits$(view(dataHdl%).ChanUnits$(ImChan%));
+    XYKey(1,1); 'key shown
+    XYKey(2,1); 'key background transparent
+    XYKey(3,0); 'key border hidden
+    XYKey(4,100); 'key x-pos - right
+    XYKey(5,100); 'key y-pos - bottom
+    XYRange(-2,minX,minY,maxX,maxY);
+    marginX:=abs(maxX-minX)/10;
+    XRange(minX-marginX,maxX+marginX);
+    Optimise(-1);
+    
+    return resultHdl%;
+end
+
+proc getIFCurveSlopeValues(resultHdl%,&ascSlope,&descSlope,&globalSlope)
+    var oldHdl%;
+    oldHdl%:=view(resultHdl%);
+    ChanFit(IFCurveAscChan%,2,1);
+    ChanFit(IFCurveAscChan%,1,XLow(),XHigh(),0.0);
+    ascSlope:=ChanFitCoef(IFCurveAscChan%,1);
+    
+    ChanFit(IFCurveDescChan%,2,1);
+    ChanFit(IFCurveDescChan%,1,XLow(),XHigh(),0.0);
+    descSlope:=ChanFitCoef(IFCurveDescChan%,1);
+    
+    var nbSpikes%;
+    nbSpikes%:=XYCount(IFCurveHiddenChan%); 
+    var freqData[nbSpikes%],currentData[nbSpikes%];
+    XYGetData(IFCurveHiddenChan%,currentData[],freqData[]);
+    var coef[2];
+    FitPoly(coef[],freqData[1:],currentData[1:]);'we dont want the first spike
+    globalSlope:=coef[1];
+    
+    view(oldHdl%);
+end
+
+proc getIFCurveCurrentValues(resultHdl%,&Ion,&Ioff)
+    var oldHdl%;
+    oldHdl%:=view(resultHdl%);
+    
+    var nbDescPoints%;
+    nbDescPoints%:=XYCount(IFCurveDescChan%);
+    var dummy;
+    XYGetData(IFCurveHiddenChan%,Ion,dummy,0);
+    if nbDescPoints%>1 then
+        XYGetData(IFCurveDescChan%,Ioff,dummy,nbDescPoints%-1);
+    else
+        'TODO get Ioff on the end of the asc ramp
+    endif
+    
+    view(oldHdl%);
+end
+
+
+proc getIFCurveFreqValues(resultHdl%,&fISI,&lISI)
+    var oldHdl%;
+    oldHdl%:=view(resultHdl%);
+    
+    var nbDescPoints%;
+    nbDescPoints%:=XYCount(IFCurveDescChan%);
+    var dummy;
+    XYGetData(IFCurveAscChan%,dummy,fISI,0);
+    if nbDescPoints%>1 then
+        XYGetData(IFCurveDescChan%,dummy,lISI,nbDescPoints%-1);
+    else
+        'TODO get lISI on end of asc ramp?
+    endif
+    
+    view(oldHdl%);
+end
+
+func getSpikeThreshold(VChan%,spikeTime,&thrTime)
+    'this function get the value of the spike threshold,
+    'given the time of the peak of the spike
+    'it also return the time at which the trhshold was reached
+    var tempChan%;
+    var thrValue;
+    var dataOk%;
+    tempChan%:=ChanDuplicate(VChan%);
+    if tempChan%<=0 then
+        'Error: cannot create temp duplicate channel
+        return -2;
+    endif
+    ChanProcessAdd(tempChan%,3,IFCurveSlopeMeasRange); 'Add Slope process
+    thrTime:=ChanSearch(tempChan%,8,spikeTime,spikeTime-0.1,IFCurveSpikeThreshold);
+    ChanDelete(tempChan%);
+    thrValue:=ChanValue(VChan%,thrTime,dataOk%);
+    return thrValue;  
+end
+
+func createFreqChan%(VChan%,startTime,stopTime)
+    var tempChan%,freqChan%:=-1;
+    var posThr,posSpike;
+    freqChan%:=MemChan(3);
+    tempChan%:=MemChan(0,VChan%);
+    if tempChan%>0 and tempChan%>0 then
+        MemImport(tempChan%,VChan%,startTime,stopTime);
+        ChanProcessAdd(tempChan%,3,IFCurveSlopeMeasRange);
+        posThr:=startTime;
+        repeat
+            posThr:=ChanSearch(tempChan%,7,posThr,stopTime,IFCurveSpikeThreshold); 'find the spike threshold
+            if posThr>0 then
+                posSpike:=ChanSearch(tempChan%,8,posThr,stopTime,0.0); 'find the max of the spike as the pos where the derivative becomes 0
+                MemSetItem(freqChan%,0,posSpike);
+                posThr:=posSpike;
+            endif
+        until posSpike<0 or posThr<0;
+        ChanDelete(tempChan%);
+        ChanTitle$(freqChan%,"Freq");
+    endif
+    return freqChan%;
+end
+
+func createPulseEvtChan%(ImChan%,startTime,stopTime)
+    var tempChan%,resChan%;
+    resChan%:=MemChan(3);
+    'substract the holding current value (mean on first 100ms) and take the abs value to find pos and neg pulses
+    tempChan%:=VirtualChan(0,Print$("Abs(Ch(%d)-%f)",ImChan%,ChanMeasure(ImChan%,2,startTime,startTime+100e-3)),ImChan%);
+    if tempChan%>0 and resChan%>0 then
+        MemImport(resChan%,tempChan%,startTime,stopTime,2,0,IFCurvePulseThreshold);
+        ChanDelete(tempChan%,0);
+        ChanTitle$(resChan%,"pulse+");
+    endif    
+    return resChan%;
+end
+
+'func acceptIFResult%(dataHdl%,resultHdl%)
+'    var result%:=1;
+'    var n%;
+'    n%:=interact("Analysis Complete",7,0,"Reject","Accept");
+'    if n%=1 then
+'        if resultHdl%>0 then
+'            view(resultHdl%);FileClose(0,-1);
+'        endif
+'        view(dataHdl%);Window(0,0,100,80);
+'        result%:=0;
+'    else
+'        var tempFileName$;
+'        view(dataHdl%);
+'        tempFileName$:=FileName$(1)+FileName$(2)+FileName$(3)+FileName$(4);
+'        tempFileName$+="_IFCurve.sgr";
+'        view(resultHdl%).FileSaveAs(tempFileName$);
+'        
+'        PrintLog(IFCurveLogFormat$,Print$("Ion=%+.1f Ioff=%+.1f deltaI=%+.1f deltaF=%+.1f",IFCurveRecrI,IFCurveDerecrI,IFCurveDeltaI,IFCurveDeltaF));
+'        PrintLog(IFCurveLogFormat$,Print$("ascSlope=%+.1e descSlope=%+.1e Slope=%+.1e",IFCurveAscSlope,IFCurveDescSlope,IFCurveSlope));
+'        PrintLog(IFCurveLogFormat$,Print$("Threshold=%.1f",IFCurveThresh));
+'    endif
+'    
+'    return result%;
+'end
+
+func measureSpike%(pulseStartTimeRes, pulseDuration, &RMP, &spikeHeight, &spikeWidth, &AHPAmpl, &AHPT2P, &AHPDur, &AHPHalfRelaxDur, &AHPTau, printLog%)
+    'measures some key parameters on an averaged intrasomatic spike trace
+    'parameters measured:
+    '* RMP
+    '* Spike height
+    '* Spike half-width
+    '* AHP Amplitude
+    '* AHP Time-to-peak
+    '* AHP Duration
+    '* AHP 1/2 relaxation time
+    '* AHP time constant
+    'returns 1 if all the measurement were successful, 0 if measurement could not be performed at all,
+    'otherwise, it return a negative error code which is the sum of individual measurement that could not be made
+    ' -2    RMP
+    ' -4    Spike height
+    ' etc... 
+    var result% := 0;
+    var viewHdl%, viewType%;
+    viewHdl% := view();
+    viewType% := ViewKind(viewHdl%);
+    
+    if viewType%<>4 then
+        'Error: not a result view
+        return 0;
+    endif
+    var pulseStartTime, pulseStopTime, spikePeakTime, spikeFootTime, AHPPeakTime;
+    var spikeFootTimeTemp, spikeHalfStartTime, spikeHalfStopTime, AHPEndTime, AHPHalfRelaxTime;
+    var tempHdl%;
+    
+    CursorDelete(-1);
+    HCursorDelete(-1);
+    pulseStartTime := pulseStartTimeRes-BinToX(0);
+    pulseStopTime := pulseStartTime+pulseDuration;
+    
+    'we use a hidden smr file because backward searches do not work on res file
+    '--bug reported to CED on Dec 19 2008--
+    tempHdl% := res2smr%(viewHdl%);
+    if tempHdl%>0 then
+        view(tempHdl%);
+        RMP := ChanMeasure(VmChan%,2,0.0,pulseStartTime);
+        'This method of finding the peak doesn't work...
+        'spikePeakTime := ChanSearch(VmChan%,17,pulseStartTime,MaxTime(VmChan%),0,0,3*BinSize(VmChan%))-BinSize(VmChan%);
+        'the peak is actually one point before the value found by the "Turning Point"
+        spikePeakTime := ChanSearch(VmChan%,4,pulseStartTime,pulseStartTime+5e-3,20.0);
+        if spikePeakTime>0 then
+            spikeHeight := ChanValue(VmChan%,spikePeakTime)-RMP;
+            
+            spikeHalfStartTime := ChanSearch(VmChan%,8,spikePeakTime,pulseStartTime,RMP+spikeHeight/2);
+            spikeHalfStopTime := ChanSearch(VmChan%,8,spikePeakTime,MaxTime(VmChan%),RMP+spikeHeight/2);
+            if spikeHalfStartTime>0 and spikeHalfStopTime>0 and (spikeHalfStopTime>spikeHalfStartTime) then
+                spikeWidth := spikeHalfStopTime - spikeHalfStartTime;
+            else
+                result% += -8;
+            endif
+            
+            'find the AHP by searching for a through, backward stating from rightmost axis value
+            AHPPeakTime := ChanSearch(VmChan%, 5, pulseStartTime+view(viewHdl%).BinToX(view(viewHdl%).XHigh()), spikePeakTime, minAHPAmpl);
+            if AHPPeakTime>0 then
+                AHPAmpl := RMP-ChanMeasure(VmChan%, 2, AHPPeakTime-3*BinSize(VmChan%), AHPPeakTime+3*BinSize(VmChan%)); 'measure mean value +/- 3pts around peak
+                
+                'AHP ends when Vm repolarized to 99% of AHP Ampl, with smooth of 1ms to remove noise
+                ChanProcessAdd(VmChan%,1,IFCurveSlopeMeasRange);
+                AHPEndTime := ChanSearch(VmChan%,7,AHPPeakTime,MaxTime(VmChan%),RMP-(1.0/100.0)*AHPAmpl);
+                AHPHalfRelaxTime := ChanSearch(VmChan%,7,AHPPeakTime,MaxTime(VmChan%),RMP-(1.0/2.0)*AHPAmpl);
+                ChanProcessClear(VmChan%,-1);
+                
+                'in 1st approx, the foot of the spike is the point where the voltage falls below the RMP
+                spikeFootTime := ChanSearch(VmChan%,8,spikePeakTime,AHPPeakTime,RMP);
+                if spikeFootTime>0 then
+                    'However, this could be after the after-depolarization...
+                    'if there is a turning point between the spike and the foot, then use this point as the foot instead
+                    spikeFootTimeTemp := ChanSearch(VmChan%,17,spikePeakTime,spikeFootTime)-BinSize(VmChan%);
+                    if spikeFootTimeTemp>0 then
+                        spikeFootTime := spikeFootTimeTemp;
+                    endif
+                endif
+                AHPT2P := AHPPeakTime-spikeFootTime;
+                if spikeFootTime>0 and AHPEndTime>0 then
+                    AHPDur := AHPEndTime-spikeFootTime;
+                else
+                    result% += -64;
+                endif
+                if AHPPeakTime>0 and AHPHalfRelaxTime>0 then
+                    AHPHalfRelaxDur := AHPHalfRelaxTime-AHPPeakTime;
+                else
+                    result% += -128;
+                endif
+                
+                if AHPEndTime>0 and AHPHalfRelaxTime>0 then
+                    'estimate the AHP time constant between the AHP 1/2 decay time and the end time
+                    ChanFit(VmChan%,1,1); 'create 1 order exp fit
+                    ChanFit(VmChan%,1,AHPHalfRelaxTime,AHPEndTime);
+                    AHPTau := ChanFitCoef(VmChan%,1);
+                else
+                    result% += -256;
+                endif
+            else
+                'could not find AHP
+                result% += -16;
+            endif
+        else
+            'could not find spike
+            result% += -4;
+        endif
+        FileClose(tempHdl%,-1); 'delete temp file
+        view(viewHdl%);
+        
+        'display cursors on result file
+        var rmpCur%, spikeHeightCur%, AHPAmplCur%;
+        var spikeFootCur%, AHPPeakCur%, AHPHalfCur%, AHPEndCur%;
+        rmpCur% := HCursorNew(VmChan%,RMP);
+        if rmpCur%>0 then
+            HCursorLabel(4, rmpCur%, "RMP: %p");
+            HCursorLabelPos(rmpCur%, 0.0);
+        endif
+        if spikePeakTime>0 then
+            spikeHeightCur% := HCursorNew(VmChan%,RMP+spikeHeight);
+            if spikeHeightCur%>0 then
+                HCursorLabel(4, spikeHeightCur%, Print$("Spike Height: %.2f", spikeHeight));
+                HCursorLabelPos(spikeHeightCur%, 0.0);
+            endif
+        endif
+        if AHPPeakTime>0 then
+            AHPAmplCur% := HCursorNew(VmChan%,RMP-AHPAmpl);
+            if AHPAmplCur%>0 then
+                HCursorLabel(4, AHPAmplCur%, Print$("AHP Ampl: %.2f", AHPAmpl));
+                HCursorLabelPos(AHPAmplCur%, 0.0);
+            endif
+            AHPPeakCur% := CursorNew(XToBin(AHPPeakTime-(-BinToX(0))));
+            if AHPPeakCur%>0 then
+                CursorLabel(4, AHPPeakCur%, Print$("AHP peak: %.2f", 1e3*(AHPPeakTime-spikeFootTime)));
+                CursorLabelPos(AHPPeakCur%, 100.0);
+            endif
+        endif
+        if spikeFootTime>0 then
+            spikeFootCur% := CursorNew(XToBin(spikeFootTime-(-BinToX(0))));
+            if spikeFootCur%>0 then
+                CursorLabel(0, spikeFootCur%);
+            endif
+        endif
+        if AHPHalfRelaxTime>0 then
+            AHPHalfCur% := CursorNew(XToBin(AHPHalfRelaxTime-(-BinToX(0))));
+            if AHPHalfCur%>0 then
+                CursorLabel(4, AHPHalfCur%, Print$("AHP half dur: %.2f", 1e3*AHPHalfRelaxDur));
+                CursorLabelPos(AHPHalfCur%, 0.0);
+            endif
+        endif
+        if AHPEndTime>0 then
+            AHPEndCur% := CursorNew(XToBin(AHPEndTime-(-BinToX(0))));
+            if AHPEndCur%>0 then
+                CursorLabel(4, AHPEndCur%, Print$("AHP dur: %.2f", 1e3*AHPDur));
+                CursorLabelPos(AHPEndCur%, 100.0);
+            endif
+        endif
+        
+        'draw exp fit on result view
+        if AHPEndTime>0 and AHPHalfRelaxTime>0 and spikeFootTime>0 then
+            ChanFit(VmChan%,0,0); 'clear previous fit
+            ChanFit(VmChan%,1,1); 'create 1 order exp fit
+            ChanFit(VmChan%,1+2,Print$("Cursor(%d)",AHPHalfCur%),Print$("Cursor(%d)",AHPEndCur%));
+            ChanFitShow(VmChan%,1+2,Print$("Cursor(%d)",spikeFootCur%),Print$("Cursor(%d)",AHPEndCur%));
+        endif
+        
+        if printLog% then
+            'write values in log
+            PrintLog("--------------------------------------------------------------------------------\n");
+            PrintLog("file: %s - %s %s\n", FileName$(3)+FileName$(4)+FileName$(5), Date$(), Time$());
+            PrintLog("RMP : %.2f mV\n",RMP);
+            PrintLog("Spike height: %.2f mV, Spike width: %.2f ms\n", spikeHeight, 1e3*spikeWidth);
+            PrintLog("AHP ampl: %.2f mV, AHP Time-to-peak: %.2f ms\n", AHPAmpl, 1e3*(AHPPeakTime-spikeFootTime));
+            PrintLog("AHP duration: %.2f ms, AHP 1/2 relax: %.2f ms\n", 1e3*AHPDur, 1e3*AHPHalfRelaxDur);
+            PrintLog("AHP time constant: %.2f ms\n", 1e3*AHPTau);
+        endif
+    else
+        'Message("Error: cannot create a temp time view");
+        return 0;
+    endif
+    if result%=0 then
+        return 1;
+    else
+        return result%;
+    endif
+end
+
+func makeMeanIFCurve(resultHdl%, chan%, clusterCriteria)
+    var oldViewHdl%,tempHdl%;
+    oldViewHdl% := view(resultHdl%);
+    'extract data from XY view
+    var nbPoints%;
+    nbPoints% := XYCount(chan%);
+    var xData[nbPoints%];
+    var yData[nbPoints%];
+    var meanXData[nbPoints%];
+    var meanYData[nbPoints%];
+    var sdXData[nbPoints%];
+    var sdYData[nbPoints%];
+    var nData[nbPoints%];
+    var nbClusters% := 0;
+    var nbPointsInCluster% := 0;
+    XYGetData(chan%, xData[], yData[]);
+    
+    'sort X and Y data
+    ArrSort(xData[],0,yData[]);
+    
+    'clusterize and average
+    var i%;
+    var prevXValue;
+    var startCluster%;
+    var tempMean, tempSD;
+    'first indice has no prev value, start a new cluster and iterate from there
+    prevXValue := xData[0];
+    startCluster% := 0;
+    nbClusters% := 1;
+    nbPointsInCluster% := 1;
+    for i% := 1 to nbPoints%-1 do
+        if abs(xData[i%]-prevXValue)>clusterCriteria then
+            'we jave moved to a different X-value, compute avg and move on
+            
+            'avg X Data
+            ArrSum(xData[startCluster%:nbPointsInCluster%],tempMean,tempSD);
+            meanXData[nbClusters%-1] := tempMean;
+            sdXData[nbClusters%-1] := tempSD;
+            
+            'avg Y Data
+            ArrSum(yData[startCluster%:nbPointsInCluster%],tempMean,tempSD);
+            meanYData[nbClusters%-1] := tempMean;
+            sdYData[nbClusters%-1] := tempSD;
+            
+            nData[nbClusters%-1] := nbPointsInCluster%;
+            
+            prevXValue := xData[i%];
+            startCluster% := i%;
+            nbPointsInCluster% := 1;
+            nbClusters% += 1;
+        else
+            nbPointsInCluster% += 1;
+        endif
+    next
+    'at the end of the loop, we still have the last points that constitute a cluster of their own
+    'avg X Data
+    ArrSum(xData[startCluster%:],tempMean,tempSD);
+    meanXData[nbClusters%-1] := tempMean;
+    sdXData[nbClusters%-1] := tempSD;
+    'avg Y Data
+    ArrSum(yData[startCluster%:],tempMean,tempSD);
+    meanYData[nbClusters%-1] := tempMean;
+    sdYData[nbClusters%-1] := tempSD;
+    nData[nbClusters%-1] := nbPointsInCluster%;
+    
+    'we counted one too many clusters at the last iteration.
+    'nbClusters% -= 1;
+    
+    addMeanSDCurveToXYView(resultHdl%, meanXData[:nbClusters%], meanYData[:nbClusters%], sdYData[:nbClusters%]);
+    tempHdl% := copyMeanSDDataToClipboard(meanXData[:nbClusters%],sdXData[:nbClusters%],meanYData[:nbClusters%],sdYData[:nbClusters%],nData[:nbClusters%]);
+        
+    view(oldViewHdl%);
+    return tempHdl%;
+end
+
+proc addMeanSDCurveToXYView(resultHdl%, meanXData[], meanYData[], sdYData[])
+    var sdChan%, meanChan%;
+    sdChan% := XYSetChan(0);
+    meanChan% := XYSetChan(0);
+    
+    
+        
+    'set display properties
+    ChanTitle$(meanChan%, "mean");
+    XYJoin(meanChan%,0);
+    XYDrawMode(meanChan%,1,6);'display as triangles size 10
+    XYDrawMode(meanChan%,2,10);
+    
+    ChanTitle$(sdChan%, "+/- SD");
+    XYJoin(sdChan%,1);
+    XYDrawMode(sdChan%,1,0);'no data point, solid line, auto axis
+    XYDrawMode(sdChan%,2,0);
+    XYDrawMode(sdChan%,3,0);
+    XYDrawMode(sdChan%,4,1);
+    XYDrawMode(sdChan%,5,1);
+    
+    XYColour(meanChan%,16,1);
+    XYColour(meanChan%,16,2);
+    
+    XYColour(sdChan%,16,1);
+    XYColour(sdChan%,16,1);
+    
+    'calculate the width of the error markers
+    var errWidth;
+    errWidth := ERRWIDTHINPERCENTOFTHEXRANGE*(XHigh()-XLow());
+    
+    'add mean data
+    XYAddData(meanChan%, meanXData[], meanYData[]);
+    
+    'add sd data
+    'we generate 10 points per values as such:
+    '    9 
+    '  7---8
+    '    |6
+    '    |
+    '   1O10
+    '    |
+    '    |2
+    '  3---4
+    '    5
+    ' it is important to start and end on the actual data point
+    'so that points are linked by their actual mean value
+    var i%, nbPoints%;
+    var tempX,tempY,tempSD;
+    var pointX,pointY;
+    nbPoints% := Len(meanXData[]);
+    for i% := 0 to nbPoints%-1 do
+        tempX := meanXData[i%];
+        tempY := meanYData[i%];
+        tempSD := sdYData[i%];
+        
+        '1
+        pointX := tempX;
+        pointY := tempY;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '2
+        pointX := tempX;
+        pointY := tempY-tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '3
+        pointX := tempX-errWidth;
+        pointY := tempY-tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '4
+        '1
+        pointX := tempX+errWidth;
+        pointY := tempY-tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '5
+        pointX := tempX;
+        pointY := tempY-tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '6
+        pointX := tempX;
+        pointY := tempY+tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '7
+        pointX := tempX-errWidth;
+        pointY := tempY+tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '8
+        pointX := tempX+errWidth;
+        pointY := tempY+tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '9
+        pointX := tempX;
+        pointY := tempY+tempSD;
+        XYAddData(sdChan%, pointX, pointY);
+        
+        '10
+        pointX := tempX;
+        pointY := tempY;
+        XYAddData(sdChan%, pointX, pointY);
+    next
+
+end
+
+func copyMeanSDDataToClipboard(meanXData[],sdXData[],meanYData[],sdYData[],nData[])
+    var nbPoints%;
+    var tempHdl%;
+    var oldViewHdl%;
+    var i%;
+    
+    oldViewHdl% := view();
+    
+    tempHdl% := FileNew(1,0); 'create an invisible txt window
+    if tempHdl%<0 then
+        Message("ERROR: could not copy the data in the clipboard");
+        return
+    endif
+    
+    Print("#%s\t%s\t%s\t%s\t%s\n","meanX","sdX","meanY","sdY","N");
+    nbPoints% := Len(meanXData[]);
+    for i% := 0 to nbPoints%-1 do
+        Print("%f\t%f\t%f\t%f\t%d\n",meanXData[i%],sdXData[i%],meanYData[i%],sdYData[i%],nData[i%]);
+    next
+    
+    EditSelectAll();
+    EditCopy();
+    
+    
+    view(oldViewHdl%);
+    return tempHdl%;
+end
+
+    

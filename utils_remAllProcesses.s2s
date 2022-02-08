@@ -1,0 +1,13 @@
+var openFiles%[20];
+var i%;
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+ViewList(openFiles%[],1+32768);
+for i% := 1 to openFiles%[0] do
+    view(openFiles%[i%]);
+    ChanProcessClear();
+next

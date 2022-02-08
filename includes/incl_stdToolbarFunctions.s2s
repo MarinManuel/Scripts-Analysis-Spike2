@@ -1,0 +1,264 @@
+'******************************************************************************
+'* Standard toolbar functions                                                 *
+'******************************************************************************
+'each script MUST provide their own set of customized functions if they use the
+'standard buttons
+#include "incl_logFileFunctions.s2s"
+#include "incl_SQLFunctions.s2s"
+#include "incl_utilFunctions.s2s"
+#include "incl_forceTransducerFunctions.s2s"
+
+const
+stdFinishButton% := -1,
+stdResetButton% := 3,
+stdStartButton% := 4,
+stdParamsButton% := 6,
+stdAddNoteButton% := 7,
+stdOptimiseButton% := 8,
+stdRemoveForceOffset% := 10,
+stdSetForceGainButton% := 11;
+
+const nbSavedNotes% := 10;
+
+func insertStdButtons()
+    'this function has to be called in each script to insert the set of standard
+    'buttons to the toolbar
+    var toolbarOffset% := 12;
+    ToolbarSet(stdFinishButton%,"Finish&&Save...|0x7b|F12",doStdQuitSave%);
+    '--
+    ToolbarSet(stdResetButton%,"Stop/Reset|0x7a|F11",doStdReset%);
+    Toolbarset(stdStartButton%,"Start|0x79|F10",doStdStart%);
+    '--
+    ToolbarSet(stdParamsButton%,"Parameters|0x78|F9",doStdParams%);
+    ToolbarSet(stdAddNoteButton%,"Add note|0x77|F8",doStdAddNote%);
+    ToolbarSet(stdOptimiseButton%, "Optimise|0x76|F7", doStdOptimise%);
+    '--
+    ToolbarSet(stdRemoveForceOffset%, "Zero force|0x75|F6", doStdRemoveForceOffset%);
+    ToolbarSet(stdSetForceGainButton%, "Set Force Gain|0x74|F5", doStdSetForceGain%);
+    return toolbarOffset%;
+end;
+
+'#### Standard function. A customized version of this 3 functions HAS to be provided by each script
+'the following functions are only for debugging purposes -- they should be commented
+'### COMMENT BELOW
+'func doStart%()
+'end
+'func doParams%()
+'end
+'func doStop%()
+'end
+'func doReset%()
+'end
+'### END COMMENT
+func doStdStart%()
+    'this function includes instructions that are common for all scripts,
+    'then calls the customized doStart% function, which should be provided by every
+    'protocol script
+    
+    'disable start button
+    ToolbarEnable(stdStartButton%,0);
+    return doStart%(); 'doStart% HAS to be implemented by each script, even if it is empty
+end
+
+func doStdReset%()
+    'this function includes instructions that are common for all scripts,
+    'then calls the customized doStart% function, which should be provided by every
+    'protocol script
+    
+    var result%;
+    result% := doReset%(); 'doReset% HAS to be implemented by each script, even if it is empty
+    if result%>0 then
+        're-enable Start button
+        ToolbarEnable(stdStartButton%, 1);
+    endif
+    return 1;
+end
+
+func doStdParams%()
+    'this function includes instructions that are common for all scripts,
+    'then calls the customized doStart% function, which should be provided by every
+    'protocol script
+    return doParams%(); 'doParams% HAS to be implemented by each script, even if it is empty
+end
+
+'these functions implement the behaviour of the standard set of buttons
+func doStdOptimise%()
+    var i%;
+    Optimise(-1);
+    for i%:=1 to Dup() do
+        view(Dup(i%)).Optimise(-1);
+    next
+    return 1;
+end;
+
+func doStdAddNote%()
+    var ok%;
+    var note$, noteTime;
+    var timeStamp%,curTime$;
+    var prevNotes$[nbSavedNotes%];
+    var index%;
+    if SampleStatus()=2 then
+        noteTime := view(dataFileHdl%).MaxTime();
+    endif
+    curTime$ := Time$(1,1+2+4,3,":");
+    ProfileReadArr$("experiments","notes", prevNotes$[]);
+    DlgCreate("Insert note",0,0,0,0,-1,mainScreen%);
+    DlgString(1,"Note:",1000,"",0,0,MySQLconvRes2List$(prevNotes$));
+    ok% := DlgShow(note$);
+    if ok% and Len(note$)>0 then 
+        if SampleStatus()=2 then 'if we're sampling, write in the data file
+            noteTime := view(dataFileHdl%).MaxTime();
+            view(dataFileHdl%).SampleText(note$, noteTime);
+            protocolText$ += Print$("NOTE [%s]: %s\n",curTime$,note$);
+        else 'otherwise, just write in the ExpLog
+            expLogPrint(Print$("#### NOTE [%s]: %s",curTime$,note$));
+        endif
+        index% := ArrHasStr%(prevNotes$, note$);
+        if index%<0 then
+            'shift everything one down
+            ArrConst(prevNotes$[1:],prevNotes$[0:nbSavedNotes%-1]);
+            'and put the new note in first pos
+            prevNotes$[0] := note$;
+        else
+            if index%=0 then
+                'do nothing
+            else
+                'shift everything down, up to the index
+                ArrConst(prevNotes$[1:index%],prevNotes$[0:index%]);
+                prevNotes$[0] := note$;
+            endif
+        endif
+        ProfileWriteArr$("experiments","notes", prevNotes$[]);
+    endif
+    return 1;
+end;
+
+func doStdRemoveForceOffset%()
+    forceRemoveOffset();
+    return 1;
+end
+
+func doStdSetForceGain%()
+    var i%, ok%, forceTransducerId%, gainId%;
+    var currGain;
+    const zeroBut% := 2;
+    Profile("experiments", "Force Transducer", 0, forceTransducerId%);
+    var forceGainStr$[len(forceGains[])];
+    for i% := 0 to len(forceGains[])-1 do
+        forceGainStr$[i%] := Str$(forceGains[i%]);
+    next
+    
+    gainId% := forceGetGainId%();
+    DlgCreate("Adjust force transducer gain",0,0,0,0,-1,mainScreen%);
+    DlgList(1,"Force Transducer",forceTransducters$);
+    DlgList(2,"Gain",forceGainStr$[]);
+    DlgButton(zeroBut%, "zero DC", zeroDC%);
+    ok% := DlgShow(forceTransducerId%, gainId%);
+    if ok% then
+        forceSetGain(gainId%);
+        forceAdjustChanGain(forceTransducerId%, gainId%);
+        Profile("experiments", "Force Transducer", forceTransducerId%);
+    endif
+    return 1;
+end
+
+'******************************************************************************
+'* Save functions                                                             *
+'******************************************************************************
+func doStdQuitSave%()
+    doReset%();
+    if SampleStatus()=2 then
+        SampleStop();
+    endif
+    doStop%();
+    return doSave%();
+end
+
+func doSave%()
+    var ok%,dummy%,dummy$[1][2];
+    var runComment$;
+    var recMode%,recFreq;
+    var dataFileName$,dataFileNameTemplate$;
+    var resultFileName$;
+    var saveResults% := 1;
+    
+    'there is a good chance that the file was recorded in the same mode as the previous/latest
+    var recModes$[3][2];
+    MySQLquery%("select mode,has_freq from recording_modes",recModes$[][]);
+    MySQLquery%("select mode_id,mode_freq from record_files order by timestamp desc limit 1;",dummy$[][]);
+    recMode% := Val(dummy$[0][0]);
+    recFreq  := Val(dummy$[0][1]);
+    
+    FrontView(dataFileHdl%);
+    if ViewKind(dataFileHdl%)<>0 then
+        'just in case we have lost track of the handle of the data file
+        dataFileHdl% := SampleHandle(0);
+    endif
+    
+    DlgCreate("Save File",0,0,0,0,-1,mainScreen%);
+    DlgAllow(0,0,modeChange%);
+    DlgLabel(1,"Comment:");
+    DlgString(2,50,10000,"",3);
+    DlgList(3,"mode:",recModes$[][0],Len(recModes$[][0]),10);
+    DlgReal(4,10,0,100,30,3,1);
+    DlgText("kHz",41,3);
+    DlgCheck(5,"Save Result File(s)");
+    ok% := DlgShow(dummy%,runComment$,recMode%,recFreq,saveResults%);
+    if ok% then
+        FileSave();
+        dataFileName$ := view(dataFileHdl%).FileName$(3)+view(dataFileHdl%).FileName$(4)+view(dataFileHdl%).FileName$(5);
+        var runID%;
+        runID% := MySQLquery%(Print$("insert into record_files (filename,mode_id,mode_freq,protocol_id,cell_id,comment,log_text) "
+        "values ('%s',%d,%f,%d,%d,'%s','%s')",magicQuote$(dataFileName$),recMode%,recFreq,protocolID%,cellID%,magicQuote$(runComment$),magicQuote$(protocolText$)),dummy$[][]);
+        expLogPrint("");
+        expLogPrint(Print$("*** Protocol %s||%s %s id:%d/%d/%d/%d",protocolName$,Date$(2,2,3,3,"/"),Time$(1,1+2+4,3,":"),expID%,elecID%,cellID%,runID%));
+        if Len(runComment$) then
+            expLogPrint(runComment$);
+        endif;      
+        if Len(protocolText$) then
+            expLogPrint(protocolText$);
+        endif;
+        expLogPrintLine();
+        if Val(recModes$[recMode%][1]) then
+            expLogPrint(Print$("Mode: %s (%.2f kHz)||->%s",recModes$[recMode%][0],recFreq,dataFileName$));
+        else
+            expLogPrint(Print$("Mode: %s||->%s",recModes$[recMode%][0],dataFileName$));
+        endif;        
+        var i%;
+        if saveResults% and nbResultFiles%>0 then
+            dataFileNameTemplate$ := view(dataFileHdl%).FileName$(3)+view(dataFileHdl%).FileName$(4);
+            for i% := 0 to nbResultFiles%-1 do
+                if ViewKind(resultFiles%[i%]) >= 0 then 'do only if the view atually exists 
+                    resultFileName$ := dataFileNameTemplate$+"_res"+Print$("%03d",i%)+ext$[ViewKind(resultFiles%[i%])];
+                    view(resultFiles%[i%]);FileSaveAs(recordPath$+resultFileName$);
+                    view(dataFileHdl%);
+                    MySQLquery%(Print$("insert into result_files (run_id,filename,protocol_id,log_text) values "
+                    "(%d,'%s',%d,'%s');",runID%,magicQuote$(resultFileName$),protocolID%,magicQuote$(resultFileComments$[i%])),dummy$[][]);
+                    expLogPrint(resultFileComments$[i%]);
+                    expLogPrint("||->"+resultFileName$);
+                endif
+            next;
+        endif;
+    endif;
+    return -1;
+end;
+
+func modeChange%(item%)
+    const modeItem% := 3; 'this is the 'mode' ListBox defined in the doSave% function, change accordingly
+    const freqItem% := 4; 'this is the 'freq' input box
+    docase
+    case item% = 0 then
+        'first call to the function
+        'make sure the enabled status of freqItem% is updated
+        modeChange%(modeItem%);
+    case item% = modeItem% then
+        var recModes$[3][2];
+        MySQLquery%("select mode,has_freq from recording_modes",recModes$[][]);
+        if Val(recModes$[DlgValue(item%)][1]) then
+            DlgEnable(1,freqItem%);
+        else
+            DlgEnable(0,freqItem%);
+        endif;
+    endcase;
+    return 1;
+    end;

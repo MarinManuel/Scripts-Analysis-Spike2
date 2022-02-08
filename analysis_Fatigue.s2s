@@ -1,0 +1,165 @@
+'##### analysis_Fatigue.s2s
+'## Marin Manuel Nov 2011
+'## a script to measure the fatigue of mouse MU
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+'## Global variables
+var dataHdl%,xy1twHdl%,xyTetHdl%,trainDuplHdl%,firstTwitchDuplHdl%;
+var p2pChan%;
+var startPos,endPos;
+var timeWindow := 25e-3; 's
+var ok%;
+
+
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+
+dataHdl% := view();
+if ViewKind(dataHdl%)<>0 then
+    Message("ERROR: this script must be run on a time view");
+    halt
+endif
+
+startPos := XLow();
+endPos := XHigh();
+trig1Chan% := 29;
+trig2Chan% := 28;
+
+
+'# Dialog box
+DlgCreate("Fatigue Test Analysis");
+DlgChan(1,"Force Channel",0x1+0x10+0x40+0x200);
+DlgChan(2,"EMG Channel",0x1+0x10+0x40+0x200);
+DlgChan(3,"Train Start Event Channel",0x2+0x8+0x20);
+DlgChan(4,"Train Event Channel",0x2+0x8+0x20);
+DlgReal(5,"Time window (s)",0,100,0,0,0.001);
+DlgXValue(6,"Start analysis at");
+DlgXValue(7,"  End analysis at");
+ok% := DlgShow(forceChan%,emgChan%,trig1Chan%,trig2Chan%,timeWindow,startPos,endPos);
+if ok% then
+    'create EMG P2P measurements
+    CursorDelete(-1);
+    CursorNew(startPos,1);
+    CursorActive(1, 14, trig2Chan%, "Cursor(0)", "Cursor(0)+1", "MaxTime()", 1);   'Data points
+    MeasureX(102, 0, "Cursor(0)");
+    MeasureY(10, emgChan%, "Cursor(0)", "Cursor(1)");
+    p2pChan% := MeasureToChan(0, "EMG P2P", 7, 14, trig2Chan%, 0, 1, 0, 0);
+    Process(startPos, endPos, 1, 1, p2pChan%);
+    DrawMode(p2pChan%, 3, 0, 0, 1); 'Set Waveform
+    MarkShow(p2pChan%, 0, 0); 'Set marker to display and mode
+    'create XY window for tetanus measurements
+    view(dataHdl%);
+    CursorActive(1, 14, trig1Chan%, "Cursor(0)", "MaxTime()", "0", 1);   'Data points
+    xyTetHdl% := MeasureToXY(14,trig1Chan%,0,1,0,0,"Cursor(0)>Cursor(1)");
+    if xyTetHdl% > 0 then
+        MeasureX(102,0,"Cursor(0)");
+        MeasureY(10,forceChan%,"Cursor(0)","Cursor(1)");
+        MeasureChan(1,"Force",0);
+        MeasureY(7,emgChan%,"Cursor(0)","Cursor(1)");
+        MeasureChan(0,"EMG Area",0);
+        MeasureY(2,p2pChan%,"Cursor(0)","Cursor(1)");
+        MeasureChan(0,"mean EMG P2P",0);
+        Process(startPos, endPos, 1, 1);
+        ChanTitle$(0,"Norm. values");
+        ChanUnits$(0,"%");
+        XYKey(4,80);'move legend to the right edge
+        var tempXArr[1000];
+        var tempYArr[1000];
+        var i%,n%;
+        var list%[1], nCh%;
+        nCh% := ChanList(list%); 'number of channels in a xy file
+        for i% := 1 to nCh% do
+            n% := XYGetData(i%,tempXArr,tempYArr);
+            if n%>0 then
+                XYDelete(i%);
+                ArrDiv(tempYArr,tempYArr[0]);
+                ArrMul(tempYArr,100);
+                XYAddData(i%,tempXArr[:n%],tempYArr[:n%]);
+                ArrConst(tempXArr,0);
+                ArrConst(tempYArr,0);
+            endif
+        next
+        Optimise(-1);
+    endif
+    
+    'create XY window for 1st twitch measurements
+    view(dataHdl%);
+    xy1twHdl% := MeasureToXY(14,trig1Chan%,0,1,0,0);
+    if xy1twHdl% > 0 then
+        MeasureX(102,0,"Cursor(0)");
+        MeasureY(10,forceChan%,"Cursor(0)",Print$("Cursor(0)+%f",timeWindow));
+        MeasureChan(1,"Force",0);
+        MeasureY(10,emgChan%,"Cursor(0)",Print$("Cursor(0)+%f",timeWindow));
+        MeasureChan(0,"EMG",0);
+        Process(startPos, endPos, 1, 1);
+        ChanTitle$(0,"Norm. 1st twitch P2P amplitude");
+        ChanUnits$(0,"%");
+        XYKey(4,80);'move legend to the right edge
+        ArrConst(tempXArr[],0);
+        ArrConst(tempYArr[],0);
+        for i% := 1 to 2 do
+            n% := XYGetData(i%,tempXArr,tempYArr);
+            if n%>0 then
+                XYDelete(i%);
+                ArrDiv(tempYArr,tempYArr[0]);
+                ArrMul(tempYArr,100);
+                XYAddData(i%,tempXArr[:n%],tempYArr[:n%]);
+                ArrConst(tempXArr,0);
+                ArrConst(tempYArr,0);
+            endif
+        next
+        Optimise(-1);
+    endif
+    
+    'create duplicate view for first twitch
+    view(dataHdl%);
+    var firstEventPos;
+    firstEventPos := NextTime(trig1Chan%,startPos);
+    firstTwitchDuplHdl% := WindowDuplicate();
+    if firstTwitchDuplHdl%>0 and firstEventPos>0 and firstEventPos<endPos then
+        ChanHide(-1);
+        ChanShow(forceChan%,emgChan%,trig1Chan%);
+        ViewTrigger(trig1Chan%,0,0,1,0,0,1);  'Enable view trigger
+        XRange(firstEventPos,firstEventPos+timeWindow);
+        ViewOverdraw(1+2,trig1Chan%,startPos,endPos); 'Merge events
+        Optimise(-1);
+    endif
+    
+    'create duplicate view for train
+    view(dataHdl%);
+    var secondEventPos;
+    firstEventPos := NextTime(trig1Chan%,startPos);
+    secondEventPos := NextTime(trig1Chan%,firstEventPos);
+    trainDuplHdl% := WindowDuplicate();
+    if trainDuplHdl%>0 and firstEventPos>0 and firstEventPos<endPos and secondEventPos>firstEventPos and secondEventPos<endPos then
+        ChanHide(-1);
+        ChanShow(forceChan%,emgChan%,trig1Chan%);
+        var preTrig,trainPeriod;
+        trainPeriod := (secondEventPos-firstEventPos);
+        preTrig := trainPeriod/4; '1/4 of the train period
+        ViewTrigger(trig1Chan%,preTrig,0,1,0,0,1);  'Enable view trigger
+        Draw(firstEventPos-preTrig,trainPeriod);
+        ViewOverdraw(1+2,trig1Chan%,startPos,endPos); 'Merge events
+        Optimise(-1);
+    endif
+    
+    
+    'arrange the windows and make them visible
+    view(dataHdl%).WindowVisible(1);
+    FrontView(dataHdl%);
+    view(xyTetHdl%).Window(0,0,50,50)
+    view(xy1twHdl%).Window(0,50,50,100);
+    view(trainDuplHdl%).Window(50,0,100,50);
+    view(firstTwitchDuplHdl%).Window(50,50,100,100);
+    FrontView(xyTetHdl%);
+    FrontView(xy1twHdl%);
+    FrontView(trainDuplHdl%);
+    FrontView(firstTwitchDuplHdl%);
+
+endif

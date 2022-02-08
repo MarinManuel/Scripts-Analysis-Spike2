@@ -1,0 +1,109 @@
+'#### utils_removeBaselineDrift.s2s
+'#### Marin Manuel
+'# this script removes base line drift around every specified event in the file
+
+#include "includes/incl_constants.s2s"
+
+const MAXNBCHANS% := 400;
+
+var chan%;
+chan% := forceChan%;
+var preTrigTime := 0.01; 's
+var postTrigTime := 0.50; 's
+var newOffset;
+var startTime, endTime;
+var ok%;
+startTime := XLow();
+endTime := XHigh();
+
+var chans%[MAXNBCHANS%+1];
+var memChans%[MAXNBCHANS%+1];
+var curPos;
+var offset;
+var startRegion, endRegion;
+var i%;
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+DlgCreate("Baseline Drift Removal tool");
+DlgChan(1,"Channel(s) to clean",0x1+0x10+0x200+0x40000+0x80000+0x100000);
+DlgChan(2,"Trigger channel", 0x2+0x4+0x8);
+DlgReal(3," Pre-trigger time (s)",0,Inf,0,0,0.1);
+DlgReal(4,"Post-trigger time (s)",0,Inf,0,0,0.1);
+DlgXValue(5,"Start analysis at");
+DlgXValue(6,"  End analysis at");
+DlgReal(7,"New offset",-Inf,Inf,0,0,1);
+ok% := DlgShow(chan%,trig1Chan%,preTrigTime,postTrigTime,startTime,endTime,newOffset);
+if ok% then
+    docase
+    case chan%>0 then
+        chans%[0] := 1;
+        chans%[1] := chan%;
+    case chan%=-1 then
+        ChanList(chans%[],0x1+0x10+0x200);
+    case chan%=-2 then
+        ChanList(chans%[],0x1+0x10+0x200+0x800);
+    case chan%=-3 then
+        ChanList(chans%[],0x1+0x10+0x200+0x10000);
+    endcase
+    
+    'create temp channels
+    for i% := 1 to chans%[0] do
+        memChans%[i%] := MemChan(0,chans%[i%]); 'create a memchan copy of chans%[i%]
+    next
+    
+    curPos := NextTime(trig1Chan%, startTime);
+    while curPos>0 and curPos<endTime do
+        startRegion := curPos - preTrigTime;
+        if startRegion<0 then
+            startRegion := 0;
+        endif
+        endRegion := curPos + postTrigTime;
+        if endRegion > MaxTime() then
+            'region goes past the end of the file, only take up to the end
+            endRegion := MaxTime();
+        endif
+        
+        for i% := 1 to chans%[0] do
+            if preTrigTime>0 then
+                'use the mean value between trig and preTrig to calculate the offset
+                'unless pretrig is 0, then use the value at trig (ChanMeasure returns 0 in this case)
+                offset := ChanMeasure(chans%[i%],2,startRegion,curPos)-newOffset;
+            else
+                offset := ChanValue(chans%[i%],curPos);
+            endif
+            removeOffset(chans%[i%], memChans%[i%], startRegion, endRegion, offset);
+        next
+        
+        
+        curPos := NextTime(trig1Chan%, curPos);
+    wend
+    
+    'scale and
+    'display mem chans
+    for i% := 1 to chans%[0] do
+        YRange(memChans%[i%],YLow(chans%[i%]),YHigh(chans%[i%]));
+        ChanShow(memChans%[i%]);
+    next
+    
+    XRange(startTime, endTime);
+endif
+
+
+proc removeOffset(chan%, newChan%, startTime, endTime, offset)
+    const BSZ% := 8000;             'buffer size
+    var arr[BSZ%];
+    var n%;
+    var t := startTime;
+    repeat
+        n% := ChanData(chan%, arr[], t, endTime, t);
+        if n% > 0 then            'if we got data, then
+            ArrSub(arr[:n%],offset);
+            ChanWriteWave(newChan%, arr[:n%], t);
+            t := t + n% * BinSize(chan%);
+        endif;
+    until n% <= 0;              'until no points left
+end

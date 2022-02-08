@@ -1,0 +1,77 @@
+'#### incl_forceFunctions.s2s
+'#### Marin Manuel
+'# this file contains functions to analyze force recordings
+
+const TFFFORCECRITERIA := 0.99; 'TTF = 99% of the force
+
+proc getForceValuesOnForceFreqCurve(forceFreqCurveHdl%, fracForceCriteria, &maxForce, &tff, &fracForce, &fracFreq)
+    var oldViewHdl%;
+    var nbChans%;
+    var chans%[1];
+    var chan%;
+    oldViewHdl% := view(forceFreqCurveHdl%);
+    maxForce := -1;
+    tff := -1;
+    
+    nbChans% := ChanList(chans%[]);
+    if nbChans%=3 then
+        'assume we have a curve with ascending/descending branches (+all).
+        'consider the ascending branch, i.e. channel 2
+        chan% := 2;
+    else
+        chan% := 1;
+    endif
+    
+    if ChanFit(chan%,-1)=1 and ChanFit(chan%,-2)=5 then 'check that there is a fit and that's its a sigmoidal fit
+        var minForce, forceRange;
+        var a0,a1,a2,a3,ref;
+        a0 := ChanFitCoef(chan%,0);
+        a1 := ChanFitCoef(chan%,1);
+        a2 := ChanFitCoef(chan%,2);
+        a3 := ChanFitCoef(chan%,3);
+        ref := ChanFit(chan%,-8);
+        minForce := a0;
+        maxForce := a1;
+        forceRange := maxForce-minForce;
+        
+        'the equation for the sigfit is
+        'y = a0 + (a1 - a0)/(1 + exp((a2 – x)/ a3)
+        'therefore, a known value y0 has an abscissa value x0 as such:
+        'x0 = a2 - a3 * log( (a1 - a0)/(y0 - a0) - 1 )
+
+        'this finds the Tetanic Fusion Frequency
+        var tempForce;
+        tempForce := minForce+forceRange*TFFFORCECRITERIA;
+        tff := ref + a2 - a3 * ln( (a1 - a0)/(tempForce - a0) - 1 );
+        
+        'this finds the point where the force has reached xxx% of its max
+        fracForce := minForce+forceRange*fracForceCriteria;
+        fracFreq := ref + a2 - a3 * ln( (a1 - a0)/(fracForce - a0) - 1 );
+        
+        var tffCur%, maxForceHCur%;
+        var fracFreqCur%,fracForceHCur%;
+        CursorDelete(-1);
+        HCursorDelete(-1);
+        tffCur% := CursorNew(tff);
+        fracFreqCur% := CursorNew(fracFreq);
+        maxForceHCur% := HCursorNew(chan%,maxForce);
+        fracForceHCur% := HCursorNew(chan%,fracForce);
+        
+        CursorLabel(4,tffCur%,"tff: %.2p");
+        CursorLabelPos(tffCur%,100);
+        
+        CursorLabel(1,fracFreqCur%);
+        CursorLabelPos(fracFreqCur%, 100);
+        
+        HCursorLabel(4,maxForceHCur%,"max: %.2p");
+        HCursorLabelPos(maxForceHCur%, 0);
+        
+        HCursorLabel(4,fracForceHCur%,Print$("%d%%:: %.2p",100*fracForceCriteria));
+        HCursorLabelPos(fracForceHCur%, 0);
+        
+        PrintLog("%s %s - %s\n",Date$(2,2,3,3,"/"),Time$(1,1+2,3,":"),FileName$(3)+FileName$(4));
+        PrintLog("%s\t%s\t%s\t%s\n","maxForce","TFF",Print$("%d%% Force",100*fracForceCriteria),Print$("%d%% Freq",100*fracForceCriteria));
+        PrintLog("%f\t%f\t%f\t%f\n", maxForce, tff, fracForce, fracFreq);
+    endif
+    view(oldViewHdl%);
+end

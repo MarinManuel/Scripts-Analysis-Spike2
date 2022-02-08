@@ -1,0 +1,606 @@
+'#### incl_IVcurve.s2s
+'#### Marin Manuel
+'# This script provides functions to plot IV curves
+
+'####
+'# change these global variables to change the comportment of the script
+var   IVCurveLeakSubRange := 10.0; 'mV - the region over which to fit the leak current
+const IVCurveSlopeRange := 0.5; 's - the range on chich to calculate slope
+
+const prePulseOffset := 100e-3; '(s) period to measure baseline level before pulse
+const spikeRejectionThr := -20; 'mV; the threshold to detect a spike while doing Gin pulses
+const avgTimeSpan := 5e-3; 's; the period around the peak to which average the potential
+const peakSearchSpan := 50e-3; 's - the period after the start of the pulse during which to search for the peak
+
+'####
+'# start of the script
+
+'global variables
+
+'cursors
+var IVCurvePICOnsetCur%,IVCurvePICMaxCur%,IVCurvePICAmplCur%:=1;
+var IVCurveLeakStartCur%,IVCurveLeakStopCur%;
+
+'channels
+var IVCurveAscVmChan%,IVCurveDescVmChan%;
+var IVCurveAscImChan%,IVCurveDescImChan%;
+var IVCurveAscLeakSubImChan%,IVCurveDescLeakSubImChan%;
+
+var IVCurveXYAscChan%:=2;
+var IVCurveXYDescChan%:=1;
+var IVCurveXYLeakChan%:=3;
+
+
+func doIVCurve%(VmChan%,ImChan%,startTime,stopTime)
+    var dataHdl%,ivHdl%;
+    var middleTime;
+    var iUnit$,vUnit$,iTitle$,vTitle$;
+    
+    var debugTime;
+    
+    'variables initialisation
+    dataHdl%:=view();
+    
+    iUnit$:=ChanUnits$(ImChan%);
+    iTitle$:=ChanTitle$(ImChan%);
+    vUnit$:=ChanUnits$(VmChan%);
+    vTitle$:=ChanTitle$(VmChan%);
+    
+    'debugTime := Seconds(0);
+    'PrintLog("Finding the middle point...");
+    
+    'find the peak of the voltage ramp
+    middleTime:=ChanSearch(VmChan%,1,startTime,stopTime);
+    if middleTime<=0 then
+        'Error: cannot find the peak of the voltage ramp
+        return -1;
+    endif
+    
+    'debugTime := Seconds(0);
+    'PrintLog("...done in %.2f sec\n",debugTime);
+    
+
+    IIRCreate(-1, 0, 0, 4, 300); 'IIR Low pass Butterworth 300 Hz, fourth order
+    
+    'debugTime := Seconds(0);
+    'PrintLog("Low pass filtering Im trace...");
+    
+    'first, smooth the current signal to get a nicer trace
+    var tempChan%;
+    tempChan% := IIRApply(-1,0,ImChan%,startTime-1,stopTime+1); 'Apply created IIR filter
+    if tempChan%<=0 then
+        'debugTime := Seconds(0);
+        'PrintLog("...failed! after %.2f sec\n",debugTime);
+        'there was an error in filtering the results, lets try copying the data
+        IVCurveAscImChan%:=MemChan(0,ImChan%);
+        if IVCurveAscImChan%>0 then MemImport(IVCurveAscImChan%,ImChan%,startTime,middleTime); endif
+        IVCurveDescImChan%:=MemChan(0,ImChan%);
+        if IVCurveDescImChan%>0 then MemImport(IVCurveDescImChan%,ImChan%,middleTime,stopTime); endif
+    else
+        IVCurveAscImChan%:=MemChan(0,ImChan%);
+        if IVCurveAscImChan%>0 then MemImport(IVCurveAscImChan%,tempChan%,startTime,middleTime); endif
+        IVCurveDescImChan%:=MemChan(0,ImChan%);
+        if IVCurveDescImChan%>0 then MemImport(IVCurveDescImChan%,tempChan%,middleTime,stopTime); endif
+        ChanDelete(tempChan%,0);
+        'debugTime := Seconds(0);
+        'PrintLog("...done in %.2f sec\n",debugTime);
+    endif
+    
+    'debugTime := Seconds(0);
+    'PrintLog("Low pass filtering Vm trace...");
+    
+    'same with voltage trace
+    tempChan%:=IIRApply(-1,0,VmChan%,startTime-1,stopTime+1); 'Apply created IIR filter
+    if tempChan%<=0 then
+        debugTime := Seconds(0);
+        PrintLog("...failed! after %.2f sec\n",debugTime);
+        'there was an error in filtering the results, lets try copying the data
+        IVCurveAscVmChan%:=MemChan(0,VmChan%);
+        if IVCurveAscVmChan%>0 then MemImport(IVCurveAscVmChan%,VmChan%,startTime,middleTime); endif
+        IVCurveDescVmChan%:=MemChan(0,VmChan%);
+        if IVCurveDescVmChan%>0 then MemImport(IVCurveDescVmChan%,VmChan%,middleTime,stopTime); endif
+    else
+        IVCurveAscVmChan%:=MemChan(0,VmChan%);
+        if IVCurveAscVmChan%>0 then MemImport(IVCurveAscVmChan%,tempChan%,startTime,middleTime); endif
+        IVCurveDescVmChan%:=MemChan(0,VmChan%);
+        if IVCurveDescVmChan%>0 then MemImport(IVCurveDescVmChan%,tempChan%,middleTime,stopTime); endif
+        ChanDelete(tempChan%,0);
+        debugTime := Seconds(0);
+        PrintLog("...done in %.2f sec\n",debugTime);
+    endif
+    
+    'debugTime := Seconds(0);
+    'PrintLog("creating XY view...");
+    
+'    ivHdl%:=MeasureToXY(14,VmChan%,0,100);
+'    if ivHdl%<=0 then
+'        debugTime := Seconds(0);
+'        PrintLog("...failed! in %.2f sec\n",debugTime);
+'        'Error: cannot create XY view
+'        return -3;
+'    endif
+'    MeasureX(100,IVCurveDescVmChan%,"Cursor(0)");
+'    MeasureY(100,IVCurveDescImChan%,"Cursor(0)");
+'    IVCurveXYDescChan%:=MeasureChan(1,"Desc.");
+'    MeasureX(100,IVCurveAscVmChan%,"Cursor(0)");
+'    MeasureY(100,IVCurveAscImChan%,"Cursor(0)");
+'    IVCurveXYAscChan%:=MeasureChan(0,"Asc.");
+'    Process(startTime,stopTime, 1, 1);
+    
+    var nbAscImPoints%,nbDescImPoints%,nbAscVmPoints%,nbDescVmPoints%;
+    nbAscImPoints%  := ( middleTime-startTime ) / view(dataHdl%).BinSize(ImChan%);
+    nbDescImPoints% := ( stopTime-middleTime  ) / view(dataHdl%).BinSize(ImChan%);
+    nbAscVmPoints%  := ( middleTime-startTime ) / view(dataHdl%).BinSize(VmChan%);
+    nbDescVmPoints% := ( stopTime-middleTime  ) / view(dataHdl%).BinSize(VmChan%);
+    
+    var ascIm[nbAscImPoints%];
+    var descIm[nbDescImPoints%];
+    var ascVm[nbAscVmPoints%];
+    var descVm[nbDescVmPoints%];
+    
+    nbAscImPoints%  := view(dataHdl%).ChanData(IVCurveAscImChan%,ascIm[],startTime,middleTime);
+    nbDescImPoints% := view(dataHdl%).ChanData(IVCurveDescImChan%,descIm[],middleTime,stopTime);
+    nbAscVmPoints%  := view(dataHdl%).ChanData(IVCurveAscVmChan%,ascVm[],startTime,middleTime);
+    nbDescVmPoints% := view(dataHdl%).ChanData(IVCurveDescVmChan%,descVm[],middleTime,stopTime);
+    
+    'make sure the arrays have the same size
+    nbAscImPoints% := min(nbAscImPoints%,nbAscVmPoints%);
+    nbAscVmPoints% := nbAscImPoints%;
+    nbDescImPoints% := min(nbDescImPoints%,nbDescVmPoints%);
+    nbDescVmPoints% := nbDescImPoints%;
+    
+    ivHdl% := FileNew(12);
+    IVCurveXYDescChan% := XYSetChan(1,nbDescImPoints%,0,1,24);
+    IVCurveXYAscChan%  := XYSetChan(0,nbAscImPoints%,0,1,16);
+    XYDrawMode(0,5,1); 'set auto axis range
+    XRange(view(dataHdl%).ChanValue(VmChan%,startTime),view(dataHdl%).ChanValue(VmChan%,startTime));
+    
+    'transfer the data to the XY view
+    XYAddData(IVCurveXYDescChan%,descVm[:nbDescVmPoints%],descIm[:nbDescImPoints%]);
+    XYAddData(IVCurveXYAscChan%,ascVm[:nbAscVmPoints%],ascIm[:nbAscImPoints%]);
+    
+    
+    'debugTime := Seconds(0);
+    'PrintLog("...done in %.2f sec\n",debugTime);
+    
+    'debugTime := Seconds(0);
+    'PrintLog("prettifying XY view");
+    
+    'set view options
+    XTitle$(vTitle$);
+    XUnits$(vUnit$);
+    ChanTitle$(0,iTitle$);
+    ChanUnits$(0,iUnit$);
+    ChanTitle$(IVCurveXYAscChan%,"Asc.");
+    ChanTitle$(IVCurveXYDescChan%,"Desc.");
+    XYDrawMode(-1,2,0);
+    XYKey(1,1);
+    
+    'debugTime := Seconds(0);
+    'PrintLog("...done in %.2f sec\n",debugTime);
+    
+    return ivHdl%;
+end
+
+func doLeakSubIVCurve%(VmChan%,leakYint,leakSlope)
+    var dataHdl%,leakSubIVHdl%;
+    
+    dataHdl%:=view();
+    
+    var startTime,stopTime,middleTime;
+    startTime:=NextTime(IVCurveAscImChan%,0.0);
+    middleTime:=MaxTime(IVCurveAscImChan%);
+    stopTime:=MaxTime(IVCurveDescImChan%);
+    
+    'create leak substracted channels
+    IVCurveAscLeakSubImChan% :=VirtualChan(0,Print$("Ch(%d)-(%f+Ch(%d)*%f)",IVCurveAscImChan%, leakYint,IVCurveAscVmChan%, leakSlope),IVCurveAscImChan%);
+    IVCurveDescLeakSubImChan%:=VirtualChan(0,Print$("Ch(%d)-(%f+Ch(%d)*%f)",IVCurveDescImChan%,leakYint,IVCurveDescVmChan%,leakSlope),IVCurveDescImChan%);
+    
+'    leakSubIVHdl%:=MeasureToXY(14,VmChan%,1e-3);
+'    if leakSubIVHdl%<=0 then
+'        'Error: cannot create XY view
+'        return -3;
+'    endif
+'    MeasureX(100,IVCurveDescVmChan%,"Cursor(0)");
+'    MeasureY(100,IVCurveDescLeakSubImChan%,"Cursor(0)");
+'    IVCurveXYDescChan%:=MeasureChan(1,"Desc.");
+'    MeasureX(100,IVCurveAscVmChan%,"Cursor(0)");
+'    MeasureY(100,IVCurveAscLeakSubImChan%,"Cursor(0)");
+'    IVCurveXYAscChan%:=MeasureChan(0,"Asc.");
+'    Process(startTime,stopTime, 1, 1);
+    
+    var nbAscImPoints%,nbDescImPoints%,nbAscVmPoints%,nbDescVmPoints%;
+    nbAscImPoints%  := ( middleTime-startTime ) / view(dataHdl%).BinSize(IVCurveAscImChan%);
+    nbDescImPoints% := ( stopTime-middleTime  ) / view(dataHdl%).BinSize(IVCurveDescImChan%);
+    nbAscVmPoints%  := ( middleTime-startTime ) / view(dataHdl%).BinSize(VmChan%);
+    nbDescVmPoints% := ( stopTime-middleTime  ) / view(dataHdl%).BinSize(VmChan%);
+    
+    var ascIm[nbAscImPoints%];
+    var descIm[nbDescImPoints%];
+    var ascVm[nbAscVmPoints%];
+    var descVm[nbDescVmPoints%];
+    
+    nbAscImPoints%  := view(dataHdl%).ChanData(IVCurveAscLeakSubImChan%,ascIm[],startTime,middleTime);
+    nbDescImPoints% := view(dataHdl%).ChanData(IVCurveDescLeakSubImChan%,descIm[],middleTime,stopTime);
+    nbAscVmPoints%  := view(dataHdl%).ChanData(VmChan%,ascVm[],startTime,middleTime);
+    nbDescVmPoints% := view(dataHdl%).ChanData(VmChan%,descVm[],middleTime,stopTime);
+    
+    'make sure the arrays have the same size
+    nbAscImPoints% := min(nbAscImPoints%,nbAscVmPoints%);
+    nbAscVmPoints% := nbAscImPoints%;
+    nbDescImPoints% := min(nbDescImPoints%,nbDescVmPoints%);
+    nbDescVmPoints% := nbDescImPoints%;
+    
+    leakSubIVHdl% := FileNew(12);
+    IVCurveXYDescChan% := XYSetChan(1,nbDescImPoints%,0,1,24);
+    IVCurveXYAscChan%  := XYSetChan(0,nbAscImPoints%,0,1,16);
+    XYDrawMode(0,5,1); 'set auto axis range
+    XRange(view(dataHdl%).ChanValue(VmChan%,startTime),view(dataHdl%).ChanValue(VmChan%,startTime));
+    
+    'transfer the data to the XY view
+    XYAddData(IVCurveXYDescChan%,descVm[:nbDescVmPoints%],descIm[:nbDescImPoints%]);
+    XYAddData(IVCurveXYAscChan%,ascVm[:nbAscVmPoints%],ascIm[:nbAscImPoints%]);
+    
+    'prettify the window
+    XTitle$(view(dataHdl%).XTitle$());
+    XUnits$(view(dataHdl%).XUnits$());
+    ChanTitle$(0,view(dataHdl%).ChanTitle$(IVCurveAscImChan%));
+    ChanUnits$(0,view(dataHdl%).ChanUnits$(IVCurveAscImChan%));
+    ChanTitle$(IVCurveXYAscChan%,"Asc.");
+    ChanTitle$(IVCurveXYDescChan%,"Desc.");
+    XYColour(IVCurveXYAscChan%,16);
+    XYColour(IVCurveXYDescChan%,24);
+    XYKey(1,1);          
+    XYDrawMode(-1,2,0);
+    
+    return leakSubIVHdl%;
+end
+
+proc IVCurveCleanup(dataHdl%)
+    var oldHdl%;
+    oldHdl%:=view(dataHdl%);
+    
+    if IVCurveAscImChan%>0 then ChanDelete(IVCurveAscImChan%) endif;
+    if IVCurveAscVmChan%>0 then ChanDelete(IVCurveAscVmChan%) endif;
+    if IVCurveAscLeakSubImChan%>0 then ChanDelete(IVCurveAscLeakSubImChan%) endif;
+    if IVCurveDescImChan%>0 then ChanDelete(IVCurveDescImChan%) endif;
+    if IVCurveDescVmChan%>0 then ChanDelete(IVCurveDescVmChan%) endif;
+    if IVCurveDescLeakSubImChan%>0 then ChanDelete(IVCurveDescLeakSubImChan%) endif;
+    
+    'cursors
+    IVCurvePICOnsetCur%:=0;
+    IVCurvePICMaxCur%:=0;
+    IVCurvePICAmplCur%:=1;
+    IVCurveLeakStartCur%:=0;
+    IVCurveLeakStopCur%:=0;
+    
+    'channels
+    IVCurveAscImChan%:=0;
+    IVCurveAscVmChan%:=0;
+    IVCurveAscLeakSubImChan%:=0;
+    IVCurveDescImChan%:=0;
+    IVCurveDescVmChan%:=0;
+    IVCurveDescLeakSubImChan%:=0;
+    IVCurveXYAscChan%:=0;
+    IVCurveXYDescChan%:=0;
+    IVCurveXYLeakChan%:=-1;
+    
+    view(oldHdl%);
+end
+
+proc getIVCurveLeak(ivHdl%,&leakStart,&leakStop,&leakYint,&leakSlope)
+    var oldHdl%;
+    oldHdl%:=view(ivHdl%);
+    
+    if (not CursorExists(IVCurveLeakStartCur%)) or (not CursorExists(IVCurveLeakStopCur%)) then
+        'we don't have the cursors, let's put them
+        IVCurveLeakStartCur%:=CursorNew(leakStart);
+        if IVCurveLeakStartCur%>0 then
+            CursorLabel(4,IVCurveLeakStartCur%,"leak>");
+            CursorLabelPos(IVCurveLeakStartCur%,100.0);
+        endif
+        IVCurveLeakStopCur%:=CursorNew(leakStop);
+        if IVCurveLeakStopCur%>0 then
+            CursorLabel(4,IVCurveLeakStopCur%,"<leak");
+            CursorLabelPos(IVCurveLeakStopCur%,100.0);
+        endif
+    endif
+    'use the cursor values
+    leakStart:=Cursor(IVCurveLeakStartCur%);
+    leakStop:=Cursor(IVCurveLeakStopCur%);
+    
+    'do the leak fit on the raw IV plot
+    ChanFit(IVCurveXYAscChan%,2,1);
+    ChanFit(IVCurveXYAscChan%,1+2,leakStart,leakStop,0.0);
+    leakYint:=ChanFitCoef(2,0);
+    leakSlope:=ChanFitCoef(2,1);
+    
+    'save the original view limits
+    var minX,minY,maxX,maxY;
+    minX:=XLow();
+    maxX:=XHigh();
+    minY:=YLow(1);
+    maxY:=YHigh(1);
+    
+    if ChanKind(IVCurveXYLeakChan%)=0 then 'we don't have a leak channel
+        IVCurveXYLeakChan% := XYSetChan(0,0,0,1,8);
+    endif
+    XYDelete(IVCurveXYLeakChan%);
+    XYAddData(IVCurveXYLeakChan%,XLow(),ChanFitValue(2,XLow()));
+    XYAddData(IVCurveXYLeakChan%,XHigh(),ChanFitValue(2,XHigh()));
+    ChanTitle$(IVCurveXYLeakChan%,"Leak");
+    XYDrawMode(IVCurveXYLeakChan%,2,0);
+    
+    'restore the limits
+    XRange(minX,maxX);
+    YRange(-1,minY,maxY);
+    
+    view(oldHdl%);
+end
+
+func estimateIVCurvePICOnset(rawIVHdl%,&onsetTime)
+    var tempChan%;
+    var PICOnset:=-1;
+    var startTime,stopTime;
+    stopTime:=MaxTime(IVCurveAscImChan%);
+    startTime:=NextTime(IVCurveAscImChan%,0.0);
+    'start the search at 1/3 of the ramp to avoid spurious results
+    startTime:=startTime+(1.0/3.0)*(stopTime-startTime);
+    
+    
+    'get the slope of the current chan
+    tempChan%:=ChanDuplicate(IVCurveAscImChan%);
+    if tempChan%<=0 then
+        'Error: cannot create a duplicate channel
+        return;
+    endif
+    ChanProcessAdd(tempChan%,3,IVCurveSlopeRange);
+    onsetTime:=ChanSearch(tempChan%,8,startTime,stopTime);
+    if onsetTime<=0 then
+        'we could not find a turning point, search for a minimum at least
+        onsetTime:=ChanSearch(tempChan%,2,startTime,stopTime);
+    endif
+    if onsetTime>0 then
+        PICOnset:=ChanValue(IVCurveAscVmChan%,onsetTime);
+    endif
+    ChanDelete(tempChan%);
+    view(rawIVHdl%);
+    if not CursorExists(IVCurvePICOnsetCur%) then
+        IVCurvePICOnsetCur%:=CursorNew();
+        CursorLabel(4,IVCurvePICOnsetCur%,"PIC on: %.1p");
+        CursorLabelPos(IVCurvePICOnsetCur%,100.0);
+    endif
+    if IVCurvePICOnsetCur%>0 then
+        Cursor(IVCurvePICOnsetCur%,PICOnset);
+    endif
+    return PICOnset;
+end
+
+proc estimateIVCurvePICAmpl(leakSubIVHdl%,PICOnset,&PICMax,&PICAmpl)
+    var onsetTime,stopTime,minTime;
+    
+    'find the time stamp of PIConset
+    onsetTime:=ChanSearch(IVCurveAscVmChan%,7,0.0,MaxTime(IVCurveAscVmChan%),PICOnset);
+    if onsetTime<=0 then
+        onsetTime:=0.0;
+    endif
+    stopTime:=MaxTime(IVCurveAscImChan%);
+    'find the minimum point as the amplitude of the PIC
+    minTime:=ChanSearch(IVCurveAscLeakSubImChan%,2,onsetTime,stopTime);
+    if minTime>0 then 'search succeded
+        PICMax := ChanValue(IVCurveAscVmChan%,minTime);
+        PICAmpl:= ChanMeasure(IVCurveAscLeakSubImChan%,2,minTime-5e-3,minTime+5e-3);
+        view(leakSubIVHdl%);
+        if not CursorExists(IVCurvePICMaxCur%) then
+            IVCurvePICMaxCur%:=CursorNew(PICMax);
+            CursorLabel(4,IVCurvePICMaxCur%,"PIC max: %.1p");
+            CursorLabelPos(IVCurvePICMaxCur%,0.0);
+        endif
+        if IVCurvePICMaxCur%>0 then
+            Cursor(IVCurvePICMaxCur%,PICMax);
+        endif
+        if not HCursorExists(IVCurvePICAmplCur%) then
+            IVCurvePICAmplCur%:=HCursorNew(1,PICAmpl);
+            HCursorLabel(4,IVCurvePICAmplCur%,"PIC ampl: %.1p");
+            HCursorLabelPos(IVCurvePICAmplCur%,0.0);
+        endif
+        if IVCurvePICAmplCur%>0 then
+            HCursor(IVCurvePICAmplCur%,PICAmpl);
+        endif
+    endif
+end
+
+
+proc getIVCurvePoints(rawIVHdl%,leakSubIVHdl%,&PICOnset,&PICMax,&PICAmpl)
+    var oldHdl%;
+    oldHdl%:=view();
+    if rawIVHdl%>0 then
+        view(rawIVHdl%);
+        PICOnset:=CursorExists(IVCurvePICOnsetCur%)?Cursor(IVCurvePICOnsetCur%):PICOnset;
+    endif
+    if leakSubIVHdl%>0 then
+        view(leakSubIVHdl%);
+        PICMax:=CursorExists(IVCurvePICMaxCur%)?Cursor(IVCurvePICMaxCur%):PICMax;
+        PICAmpl:=HCursorExists(IVCurvePICAmplCur%)?HCursor(IVCurvePICAmplCur%):PICAmpl;
+    endif
+    view(oldHdl%);
+end
+
+func doAutoIVCurve%(&rawIVHdl%, &leakSubIVHdl%, VmChan%, ImChan%, startTime, stopTime, &leakStart, &leakStop, &leakSlope, &PICOnset, &PICMax, &PICAmpl, printLog%)
+    'this function performs a fully automatic analysis of an IF curve
+    'it returns, through the parameters passed by reference:
+    ' - leakStart: the start of the region used for leak estimation (in VmChan% unit)
+    ' - leakStop: the end of the region used for leak estimation (in VmChan% unit)
+    ' - the voltage onset of the PIC (in VmChan% unit)
+    ' - the voltage where the PIC is maximal (in VmChan% unit)
+    ' - the amplitude of the PIC (in ImChan% unit)
+    'the parameter printLog% determines if the values are written in the log file
+    'it also returns 1 of everything went according to plan, otherwise, a negative error code
+    var dataHdl%;
+    var onsetTime;
+    var leakYint;
+    dataHdl% := view();
+    if ViewKind(dataHdl%)<>0 then
+        'Error: current view is not a Time View
+        return -1;
+    endif
+    
+    leakStart:=ChanValue(VmChan%,startTime);
+    leakStop:=leakStart+IVCurveLeakSubRange;
+    
+    rawIVHdl% := view(dataHdl%).doIVCurve%(VmChan%, ImChan%, startTime, stopTime);
+    if rawIVHdl%<0 then
+        'Error while creating the raw IV plot
+        return -2;
+    endif
+    PICOnset := estimateIVCurvePICOnset(rawIVHdl%, onsetTime);
+    getIVCurveLeak(rawIVHdl%,leakStart,leakStop,leakYint,leakSlope);
+    
+    leakSubIVHdl%:=view(dataHdl%).doLeakSubIVCurve%(VmChan%,leakYint,leakSlope);
+    if leakSubIVHdl%<0 then
+        'Error while creating the leak-substracted IV plot
+        view(rawIVHdl%); FileClose(0,-1);
+        return -3;
+    endif
+    view(dataHdl%);
+    estimateIVCurvePICAmpl(leakSubIVHdl%,PICOnset,PICMax,PICAmpl);
+    
+    IVCurveCleanup(dataHdl%);
+    view(dataHdl%);
+    if printLog% then
+        const LogFormat$:=" %-61s  |%s\n";
+        var dataFileName$;
+        dataFileName$:=FileName$(3)+FileName$(4);
+        PrintLog("%s %s - %s\n",Date$(2,2,3,3,"/"),Time$(1,1+2,3,":"),dataFileName$);
+        PrintLog("---------- -----   --------------------------------------------------------------\n"); 
+        PrintLog(LogFormat$,Print$("Gpass=%+.1e from=%+.1f to=%+.1f",leakSlope,leakStart,leakStop),"");
+        PrintLog(LogFormat$,Print$("PICOnset=%+.1f PICMaxV=%+.1f PICAmpl=%+.1f",PICOnset,PICMax,PICAmpl),"");
+    endif
+    return 1;
+end
+
+
+
+
+
+'##############################################################################
+'# Functions for Gin IV curves
+'##############################################################################
+func measurePulse%(VmChan%, ImChan%, pulseStartTime, pulseEndTime, doFilterSpikes%, &dI, &dVPeak, &dVPlat)
+    var VmBaseLine;
+    var dITemp;
+    var VmMax, VmMaxTime;
+    var depolMaxTime;
+    
+    dITemp := count(ImChan%,pulseStartTime,pulseEndTime)-count(ImChan%,pulseStartTime-prePulseOffset,pulseStartTime);
+    VmBaseLine := count(VmChan%,pulseStartTime-prePulseOffset,pulseStartTime);  
+    if dITemp >= 0 then
+        depolMaxTime   := ChanSearch(VmChan%,1,pulseStartTime,pulseStartTime+peakSearchSpan);
+    else
+        depolMaxTime   := ChanSearch(VmChan%,2,pulseStartTime,pulseStartTime+peakSearchSpan);
+    endif
+    
+    if depolMaxTime<0 then
+        'Error when looking for peak value
+        return -1;
+    endif
+    
+    if doFilterSpikes% then
+        VmMaxTime := ChanSearch(VmChan%, 1, pulseStartTime, pulseEndTime);
+        if VmMaxTime<0 then
+            'Error while looking for the maximum value of the voltage
+            return -2;
+        else
+            VmMax := ChanValue(VmChan%, VmMaxTime);
+            if VmMax>spikeRejectionThr then
+                'ignore pulse because of spiking
+                return 0;
+            endif
+        endif
+    endif
+    
+    dI := dITemp;
+    dVPeak := count(VmChan%,depolMaxTime-avgTimeSpan,depolMaxTime+avgTimeSpan) - VmBaseLine; 'depol = val moyenne autour de la depolMaxTime
+    dVPlat := count(VmChan%,pulseEndTime-100e-3,pulseEndTime) - VmBaseLine; 'depol avec sag = 100 derniers ms du pulse
+    return 1;
+end
+
+proc prettifyGinIVCurve(winHdl%, unitX$, titleX$, unitY$);
+    var oldHdl%;
+    oldHdl% := view(winHdl%);
+    
+    var lowX, lowY, highX, highY;
+    XYRange(1, lowX, lowY, highX, highY);
+    
+    XUnits$(unitX$);
+    XTitle$(titleX$);
+    ChanTitle$(0, "dV");
+    ChanUnits$(0, unitY$);
+    ChanTitle$(1, "Peak Value");
+    ChanTitle$(2, "Plateau Value");
+    
+    XRange(1.1*lowX,1.1*highX);
+    Optimise(-1);
+    
+    XYColour(1,16);
+    XYColour(2,25);
+    
+    if ChanKind(3)>0 then
+        'fit curve exists
+        XYDrawMode(3,1,0);
+        XYDrawMode(3,2,0);
+        XYDrawMode(4,1,0);
+        XYDrawMode(4,2,0);
+        XYColour(3,16);
+        XYColour(4,25);
+    endif
+    
+    'keys
+    XYKey(2, 1); 'transparent background
+    XYKey(3, 1); 'border visible
+    XYKey(4, 0); 'align left
+    XYKey(5, 0); 'align top
+    XYKey(1, 1); 'make key visible
+    
+    view(oldHdl%);
+end
+
+proc prettifyPulseAvg(winHdl%, unitX$, titleX$, unitVm$, titleVm$, unitIm$, titleIm$);
+    var oldHdl%;
+    oldHdl% := view(winHdl%);
+    
+    DrawMode(-1, 2, 0, 3); 'set Draw Mode to Waveform, no points, draw SD
+    Optimise(-1);
+    
+    XUnits$(unitX$);
+    XTitle$(titleX$);
+    
+    'change the drawing colour, 2 by 2.
+    'this should set the current and the voltage channels to be the same colour
+    var chans%[1000];
+    var nbChans%;
+    var i%;
+    var j% := 7; 'start at 7 to avoid the light gray colors
+    
+    ChanOrder(-1); 'order low at the top... first channel will be Vm
+    nbChans% := ChanList(chans%[]);
+    for i% := 1 to nbChans% step 2 do
+        ChanTitle$(chans%[i%], titleVm$);
+        ChanUnits$(chans%[i%], unitVm$);
+        ChanTitle$(chans%[i%+1], titleIm$);
+        ChanUnits$(chans%[i%+1], unitIm$);
+        
+        ChanColour(chans%[i%],1, j%);
+        ChanColour(chans%[i%],2, 4); 'second. color to light gray
+        ChanColour(chans%[i%+1],1, j%);
+        ChanColour(chans%[i%+1],2, 4);
+        j% := (j%+1) mod 40;
+        if j%<7 then
+            j% := 7;
+        endif
+    next
+    
+
+    view(oldHdl%);
+end
+

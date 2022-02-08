@@ -1,0 +1,18 @@
+'#### analysis_ForceFreq_sigmoid.s2s
+'#### Marin Manuel
+'# this script performs an off-line analysis on a Sigmoid fit on a Force-Freq curve
+
+#include "includes/incl_forceFunctions.s2s"
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+var curViewHdl%;
+curViewHdl% := view();
+if ViewKind(curViewHdl%)=12 then
+    var tff,maxForce,fracForce,fracFreq;
+    getForceValuesOnForceFreqCurve(curViewHdl%,0.90, maxForce, tff, fracForce, fracFreq);
+    PrintLog("a0\ta1\ta2\ta3\ta0/a1\n");
+    PrintLog("%.2f\t%.2f\t%.2f\t%.2f\t%.2f\n",ChanFitCoef(2,0),ChanFitCoef(2,1),ChanFitCoef(2,2),ChanFitCoef(2,3),ChanFitCoef(2,0)/ChanFitCoef(2,1));
+endif

@@ -1,0 +1,33 @@
+'#### analysis_lvl2evt.s2s
+'#### Marin Manuel
+'#
+'# converts a level Channel to an Evt channel
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+
+var startPos, stopPos, chan%, trans%;
+var evtChan%;
+var ok%;
+
+startPos := XLow();
+stopPos := XHigh();
+
+DlgCreate("Parameters");
+DlgChan(1, "Level channel to convert", 0x4);
+DlgXValue(2, "Start analysis at");
+DlgXValue(3, "  End analysis at");
+DlgList(4,"transition","low to high|high to low");
+ok% := DlgShow(chan%,startPos,stopPos,trans%);
+if ok% then
+    evtChan% := lvl2Evt%(chan%, trans%+1, startPos, stopPos);
+    if evtChan%>0 then
+        ChanShow(evtChan%);
+    endif
+endif

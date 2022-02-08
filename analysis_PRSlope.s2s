@@ -1,0 +1,60 @@
+'#### analysis_PRSlope.sgs
+'#### Marin Manuel
+'# this script measure the slope of the IF Curve in a specific range
+
+var startPos, stopPos;
+var ok%, chan%;
+var i%;
+for i% := 9 to 1 step -1 do
+    if CursorExists(i%) then
+        startPos := Cursor(i%);
+    endif
+next
+stopPos := XHigh();
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+DlgCreate("Region to analyze");
+DlgXValue(1, "Start analysis at");
+DlgXValue(2, "  End analysis at");
+ok% := DlgShow(startPos, stopPos);
+if ok% then
+    PrintLog("%s\t%s\t%s\n","ascSlope","descSlope","globSlope");
+    chan% := 2;
+    if ChanKind(chan%)<>0 then
+        ChanFit(chan%,0); 'clear fit
+        ChanFit(chan%,2,1); 'create 1st order poly fit
+        ok% := ChanFit(chan%,1, startPos, stopPos); 'do fit
+        if ok%=0 then
+            PrintLog("%f\t",ChanFitCoef(chan%,1));
+        endif
+    endif
+    chan% := 1;
+    if ChanKind(chan%)<>0 then
+        ChanFit(chan%,0); 'clear fit
+        ChanFit(chan%,2,1); 'create 1st order poly fit
+        ok% := ChanFit(chan%,1, startPos, stopPos); 'do fit
+        if ok%=0 then
+            PrintLog("%f\t",ChanFitCoef(chan%,1));
+        endif
+    endif
+    chan% := 3;
+    if ChanKind(chan%)<>0 then
+        ChanFit(chan%,0); 'clear fit
+        ChanFit(chan%,2,1); 'create 1st order poly fit
+        ok% := ChanFit(chan%,1, startPos, stopPos); 'do fit
+        if ok%=0 then
+            PrintLog("%f\t",ChanFitCoef(chan%,1));
+        endif
+    endif
+    PrintLog("\n");
+    if ChanKind(2)=0 then
+        chan% := 1;
+    else
+        chan% := 2; 
+    endif
+    ChanFitShow(chan%,1+2,XLow(),XHigh());
+endif

@@ -1,0 +1,168 @@
+'#### incl_txtFileFunctions.s2s
+'#### Marin Manuel
+'#
+'# This file provides utility functions dealing with text files
+#include "incl_constants.s2s"
+
+func importTxtFile(txtFile$)
+    'create a new data view with the content of the text file
+    'the data in the txt file must be organized in two columns
+    '(t-value) per channel
+    var txtHdl%;
+    var dummy[20];
+    var nbLines%,nbCols%,nbChans%;
+    
+    txtHdl%:=FileOpen(txtFile$,8,0);
+    if txtHdl%<=0 then
+        'Message("Error opening file "+txtFile$);
+        return -1;
+    endif
+    'PrintLog("File: %s\n",txtFile$);
+    view(txtHdl%);
+    nbLines%:=0;
+    while Read()>=0 do
+        nbLines%+=1;
+    wend
+    'PrintLog("Nb lines: %d\n",nbLines%);
+    if nbLines%>0 then
+        seek(txtHdl%,0); 'reset the pointer at the beginning of the file
+        nbCols%:=Read(dummy[]);
+        'PrintLog("Nb Columns: %d\n",nbCols%);
+        if (nbCols% mod 2)=0 then
+            'we have an even number of columns, assume time-val column pairs
+            nbChans%:=nbCols%/2;
+            seek(txtHdl%,0);
+            var data[nbLines%][nbCols%];
+            var binSz[nbChans%];
+            var chans%[nbChans%];
+            var i%;
+            for i%:=0 to nbLines%-1 do
+                Read(data[i%][]);
+            next
+            for i%:=0 to nbChans%-1 do
+                binSz[i%]:=data[1][i%*2]-data[0][i%*2];
+            next
+            'PrintLog("Bin sizes: ");
+            'PrintLog(binSz[]);
+            'PrintLog("\n");
+            
+            'create an new file
+            var dataHdl%;
+            dataHdl%:=FileNew(7,0,1,1,1.0);
+            if dataHdl%<=0 then
+                'Message("Error: cannot create data file");
+                return -2;
+            endif
+            'create channels
+            var tempChan%;
+            var maxVal,maxValI,minVal,minValI,absMaxVal;
+            var scale;
+            for i%:=0 to nbChans%-1 do
+                tempChan%:=ChanNew(0,1,0,binSz[i%]);
+                if tempChan%>0 then
+                    chans%[i%]:=tempChan%;
+                    maxValI:=max(data[][1+i%*2]);
+                    maxVal:=data[maxValI][1+i%*2];
+                    minValI:=min(data[][1+i%*2]);
+                    minVal:=data[minValI][1+i%*2];
+                    absMaxVal:=max(abs(maxVal),abs(minVal));
+                    scale:=absMaxVal/5;
+                    ChanScale(tempChan%,scale);
+                    ChanWriteWave(tempChan%,data[][1+i%*2],0.0);
+                    ChanShow(tempChan%);
+                endif
+            next
+        else
+            'we have an uneven number of columns
+            return -3;
+        endif
+    endif
+    view(txtHdl%);FileClose(0,-1);
+    return dataHdl%;
+end
+
+proc seek(&fileHdl%,pos)
+    'this function sets the file pointer at the line specified by pos:
+    'pos=0 - begining
+    'pos=x - line x (or last line if x is greater than the number of lines)
+    'pos<0 - last line
+    var name$;
+    var i%,readOk%;
+    name$:=FileName$();
+    if pos>=0 then
+        view(fileHdl%);FileClose(0,-1);
+        fileHdl%:=FileOpen(name$,8,0);
+        i%:=1;
+        readOk%:=1;
+        if fileHdl%>0 then
+            while readOk%>0 and i%<pos do
+                readOk%:=Read();
+                i%+=1;
+            wend
+        endif
+    else
+        seek(fileHdl%,inf);
+    endif
+    view(fileHdl%);
+end
+
+func extractExtensionFromFileName$(theFileName$)
+    'returns the extension of the file, that is all the rightmost char up to (and including)
+    'the rightmost dot
+    var oldViewHdl%, fileHdl%;
+    var retVal$ := "";
+    oldViewHdl% := view();
+    fileHdl% := FileOpen(theFileName$,8,0);
+    if fileHdl%>0 then
+        retVal$ := FileName$(5);
+        FileClose(0,-1);
+    endif
+    view(oldViewHdl%);
+    return retVal$;
+end
+
+func extractIndexNumbersFromFileName$(theFileName$)
+    'returns the extension of the file, that is all the rightmost char up to (and including)
+    'the rightmost dot
+    var oldViewHdl%, fileHdl%;
+    var retVal$ := "";
+    oldViewHdl% := view();
+    fileHdl% := FileOpen(theFileName$,8,0);
+    if fileHdl%>0 then
+        retVal$ := FileName$(4);
+        FileClose(0,-1);
+    endif
+    view(oldViewHdl%);
+    return retVal$;
+end
+
+func extractBaseNameFromFileName$(theFileName$)
+    'returns the extension of the file, that is all the rightmost char up to (and including)
+    'the rightmost dot
+    var oldViewHdl%, fileHdl%;
+    var retVal$ := "";
+    oldViewHdl% := view();
+    fileHdl% := FileOpen(theFileName$,8,0);
+    if fileHdl%>0 then
+        retVal$ := FileName$(3);
+        FileClose(0,-1);
+    endif
+    view(oldViewHdl%);
+    return retVal$;
+end
+
+func extractFilePathFromFileName$(theFileName$)
+    'returns the extension of the file, that is all the rightmost char up to (and including)
+    'the rightmost dot
+    var oldViewHdl%, fileHdl%;
+    var retVal$ := "";
+    oldViewHdl% := view();
+    fileHdl% := FileOpen(theFileName$,8,0);
+    if fileHdl%>0 then
+        retVal$ := FileName$(1)+FileName$(2);
+        FileClose(0,-1);
+    endif
+    view(oldViewHdl%);
+    return retVal$;
+end
+        

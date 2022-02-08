@@ -1,0 +1,141 @@
+'# utils_extractStimInt.s2s
+'# Marin MANUEL
+'#
+'# This script is used in conjunction with the Arduino-powered stimulator/repartition unit that I made.
+'# The stimulator provides a line of text through the serial line every time it is triggered.
+'# However, there is a variable delay between the trigger and the time the serial line is received by
+'# Spike2.
+'# This script is inteded to be run off-line and will shift each text marker back to the time of the
+'# stimulation, and provides a channel providing an analog read-out of the stimulation intensity
+'# 
+'# the text markers have the format:
+'#       < ON,x0.1 ,2.2%,1,+,CV>
+'#<OFF,1><OFF,x0.01,77.3%,6,+,CV>
+
+#include "includes/incl_constants.s2s"
+
+var startTime, endTime;
+var ok%;
+var stimTime, markerTime;
+
+startTime := XLow();
+endTime := XHigh();
+
+var newMarkerChan%, newStimIntChan%;
+
+DlgCreate("Parameters");
+DlgChan(1,"Notes Channel", 32);
+DlgChan(2,"Stim Events Channel", 0x2+0x8+0x20+0x40);
+DlgXValue(3,"Start analysis at");
+DlgXValue(4,"  End analysis at");
+ok% := DlgShow(notesChan%, stimChan%, startTime, endTime);
+if ok% then
+    var stimText$;
+    var stimCode%[4];
+    
+    stimTime := startTime;
+    markerTime := startTime;
+    
+    newMarkerChan% := MemChan(8, 100); 'memory channel to hold the displaced notes
+    newStimIntChan% := MemChan(9,0,BinSize(1)); 'real wave memory channel to hold the stimulation intensity
+    
+    if newMarkerChan%<0 or newStimIntChan%<0 then
+        Message("ERROR: cannot create new memory channel:\n"+Error$(min(newMarkerChan%,newStimIntChan%)));
+        halt
+    endif
+    'display settings
+    ChanShow(newMarkerChan%);
+    ChanOrder(stimChan%,1);
+    
+    ChanTitle$(newStimIntChan%,"Stim. Int.");
+    ChanUnits$(newStimIntChan%,"%");
+    ChanProcessAdd(newStimIntChan%, 10, 100000, 0.0);
+    YRange(newStimIntChan%, 0.0, 100.0);
+    ChanShow(newStimIntChan%);
+    
+    
+    'find the next event containing a stim
+    stimTime := NextTime(stimChan%, stimTime);
+    'Cursor(1, stimTime);
+    'find the next event containing a stim marker
+    markerTime := NextStimMarker(notesChan%, markerTime, stimCode%[], stimText$);
+    'Cursor(2, stimTime);
+    
+    while (stimTime>0 and stimTime<endTime) and (markerTime>0 and markerTime<endTime) do
+        'create a new marker at the time of the stimulation
+        MemSetItem(newMarkerChan%, 0, stimTime, stimCode%[], stimText$);
+        'set the intensity of the stim in the real wave channel
+        MemSetItem(newStimIntChan%, 0, stimTime, extractStimInt(stimText$));
+        
+        'find the next event containing a stim
+        stimTime := NextTime(stimChan%, stimTime);
+        'Cursor(1, stimTime); 'DEBUG
+        'find the next event containing a stim marker
+        markerTime := NextStimMarker(notesChan%, markerTime, stimCode%[], stimText$);
+        'Cursor(2, markerTime); 'DEBUG
+    wend 
+    
+    
+    
+    
+endif
+
+
+func NextStimMarker(chan%, time, &code%[], &stimText$)
+    var found% := -1;
+    var result := -1;
+    var dummy%[4], text$;
+    repeat
+        time := NextTime(chan%, time, dummy%[], text$);
+        if time>0 and Left$(text$, 1)="<" and Right$(text$, 1)=">" then
+            result := time;
+            stimText$ := text$;
+            ArrConst(code%[], dummy%[]);
+            break
+        endif
+    until time<0;
+    return result;
+end
+
+func extractStimInt(stimText$)
+    var OnOff$, mult$, stimInt, stimChan, stimSign$, stimMode$, multVal;
+    var nFields%;
+    if Left$(stimText$, 1)<>"<" or Right$(stimText$, 1)<>">" then
+        return -1
+    endif
+    'stimText$ := Mid$(stimText$,2,Len(stimText$)-2); 'takes text, without the <>
+    'stimText$ := "< ON,x0.1 ,2.2%,1,+,CV>";
+    ReadSetup("><,","","","","><,");
+    var fields$[20];
+    'nFields% := ReadStr(stimText$, OnOff$, mult$, stimInt, stimChan, stimSign$, stimMode$);
+    nFields% := ReadStr(stimText$, fields$[]);
+    ReadSetup();
+    docase
+    case nFields%=7 then
+        'old format with only one stim
+        OnOff$ := fields$[1];
+        mult$ := fields$[2];
+        stimInt := Val(fields$[3]);
+        stimChan := Val(fields$[4]);
+        stimSign$ := fields$[5];
+        stimMode$ := fields$[6];
+    case nFields%=10 then
+        'new format with 2 stims
+        OnOff$ := fields$[4];
+        mult$ := fields$[5];
+        stimInt := Val(fields$[6]);
+        stimChan := Val(fields$[7]);
+        stimSign$ := fields$[8];
+        stimMode$ := fields$[9];
+    else
+        return -1
+    endcase
+    multVal := Val(Right$(mult$,Len(mult$)-1));
+    if OnOff$="OFF" then
+        return 0.0;
+    else
+        return stimInt*multVal;
+    endif
+    return -1;
+end
+

@@ -1,0 +1,189 @@
+#include "includes/incl_utilFunctions.s2s"
+
+proc createCursors()
+    CursorDelete(-1);
+    CursorNew(XToBin(-15e-3));
+    CursorNew(XToBin(-3e-3));
+    CursorNew(XToBin(35e-3));
+    CursorNew(XToBin(47e-3));
+    CursorNew(XToBin(275e-3));
+    CursorNew(XToBin(287e-3));
+    CursorNew(XToBin(325e-3));
+    CursorNew(XToBin(337e-3));
+end
+
+proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
+    view(dataHdl%);
+    var nChans%, chans%[100];
+    nChans% := ChanList(chans%[],2048);
+    if nChans% mod 2 <> 0 then
+        return
+    endif
+    nChans% := nChans% / 2;
+    var iVals[nChans%], vpreVals[nChans%], vstimVals[nChans%];
+    var i%;
+    for i% := 1 to nChans% do
+        vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
+        iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+    next
+    xyHdl% := FileNew(12,0);
+    XYSetChan(0); 'create new channel
+    XYSetChan(0); 'create new channel
+    XYSetChan(-1, nChans%, 0, 0);
+    XYAddData(1, vpreVals[], iVals[]);
+    XYAddData(2, vstimVals[], iVals[]);
+
+    var coefPre[2], coefStim[2], yrev;
+    FitPoly(coefPre[], iVals[], vpreVals[]);
+    FitPoly(coefStim[], iVals[], vstimVals[]);
+    Erev := (coefStim[0]-coefPre[0])/(coefPre[1]-coefStim[1]);
+    yrev := coefPre[0] + coefPre[1] * Erev;
+    XYAddData(3, Erev, yrev);
+    gPreRaw := coefPre[1]*1e3;
+    gStimRaw := coefStim[1]*1e3;
+    
+    'beautify channels
+    XTitle$("Vm");
+    XUnits$("mV");
+    
+    ChanTitle$(0, "Iinj");
+    ChanUnits$(0, "nA");
+    
+    ChanTitle$(1, Print$("Gpre=%.0f nS", gPreRaw));
+    XYColour(1, 13, 1);
+    
+    ChanTitle$(2, Print$("Gstim=%.0f nS Gsyn=%.0f nS", gStimRaw, gStimRaw-gPreRaw));
+    XYColour(2, 16, 1);
+    
+    ChanTitle$(3, Print$("Erev=%.1f mV", Erev));
+    XYColour(3, 38, 1);
+    
+    XYKey(1,1);
+    XYKey(2,0);
+    XYKey(3,1);
+    XYOptimise(-1);
+    
+    ChanFit(1, 0);
+    ChanFit(1, 2, 1);
+    ChanFit(1, 1+2, "XLow()", "XHigh()", "XLow()");
+    
+    ChanFit(2, 0);
+    ChanFit(2, 2, 1);
+    ChanFit(2, 1+2, "XLow()", "XHigh()", "XLow()");
+end
+
+proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulseAmp, &EPSPamp)
+    view(dataHdl%);
+    var nChans%, chans%[100];
+    nChans% := ChanList(chans%[],2048);
+    if nChans% mod 2 <> 0 then
+        return
+    endif
+    nChans% := nChans% / 2;
+    var iVals[nChans%], vpreVals[nChans%], vstimVals[nChans%], iBaseVals[nChans%], vpreBaseVals[nChans%], vstimBaseVals[nChans%];
+    var deltaIVals[nChans%], deltaVpreVals[nChans%], deltaVstimVals[nChans%];
+    var i%;
+    for i% := 1 to nChans% do
+        vpreBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
+        vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        vstimBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(5)),BinToX(Cursor(6)));
+        vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
+        iBaseVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
+        iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+    next
+    ArrConst(deltaIVals[], iVals[]);
+    ArrSub(deltaIVals[], iBaseVals[]);
+    ArrConst(deltaVpreVals[], vpreVals[]);
+    ArrSub(deltaVpreVals[], vpreBaseVals[]);
+    ArrConst(deltaVstimVals[], vstimVals[]);
+    ArrSub(deltaVstimVals[], vstimBaseVals[]);
+    
+    xyHdl% := FileNew(12,0);
+    XYSetChan(0); 'create new channel
+    XYSetChan(-1, nChans%, 0, 0);
+    XYAddData(1, deltaVpreVals[], deltaIVals[]);
+    XYAddData(2, deltaVstimVals[], deltaIVals[]);
+
+    var coefPre[2], coefStim[2];
+    FitPoly(coefPre[], deltaIVals[], deltaVpreVals[]);
+    FitPoly(coefStim[], deltaIVals[], deltaVstimVals[]);
+    gPreDelta := coefPre[1]*1e3;
+    gStimDelta := coefStim[1]*1e3;
+    
+    'beautify channels
+    XTitle$("deltaV");
+    XUnits$("mV");
+    
+    ChanTitle$(0, "deltaI");
+    ChanUnits$(0, "nA");
+    
+    ChanTitle$(1, Print$("Gpre=%.0f nS",gPreDelta));
+    XYColour(1, 13, 1);
+    
+    ChanTitle$(2, Print$("Gstim=%.0f nS Gsyn=%.0f nS", gStimDelta, gStimDelta-gPreDelta));
+    XYColour(2, 16, 1);
+    
+    XYKey(1,1);
+    XYKey(2,0);
+    XYKey(3,1);
+    XYOptimise(-1);
+        
+    ChanFit(1, 0);
+    ChanFit(1, 2, 1);
+    ChanFit(1, 1+2, "XLow()", "XHigh()", "XLow()");
+    
+    ChanFit(2, 0);
+    ChanFit(2, 2, 1);
+    ChanFit(2, 1+2, "XLow()", "XHigh()", "XLow()");
+    
+    ArrSum(vpreBaseVals[], rmp);
+    ArrSum(iBaseVals[], Idc);
+    var minIIdx% := min(deltaIVals[]);
+    pulseAmp := abs(deltaIVals[minIIdx%]);
+    'to measure EPSP amp, we first have to find the channel where the current is zero, then find the corresponding voltage channel
+    var zeroIdx% := ArrHasFloatFuzzy%(deltaIVals[],0.0,0.05);
+    var vZeroChan%;
+    if zeroIdx%>=0 then
+        vZeroChan% := chans%[zeroIdx%+1];
+        EPSPamp := view(dataHdl%).ChanMeasure(vZeroChan%, 2, BinToX(Cursor(7)),BinToX(Cursor(8))) - view(dataHdl%).ChanMeasure(vZeroChan%, 2, BinToX(Cursor(1)),BinToX(Cursor(4)));
+    endif
+end
+
+proc printResults(vh%, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, Erev, gPreDelta, gStimDelta)
+    view(vh%);
+    var nameOfFile$ := FileName$(3)+FileName$(4);
+    var output$ := Print$("%s\t%.1f\t%.1f\t%.1f\t%.2f\t%.0f\t%.0f\t%.0f\t%.1f\t%.0f\t%.0f\t%.0f\n",
+                    nameOfFile$, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, gStimRaw-gPreRaw, Erev, gPreDelta, gStimDelta, gStimDelta-gPreDelta);
+    
+    PrintLog(output$);
+    EditCopy(output$);
+end
+
+
+proc analyzeRecInh(resHdl%)
+    var rawHdl%,deltaHdl%;
+    var rmp, Idc, pulseAmp, gPreRaw, gStimRaw, gPreDelta, gStimDelta, Erev, EPSPamp;
+    view(resHdl%);
+    CursorRenumber();
+    var j%, allCursorsOK%:=1;
+    for j% := 1 to 8 do
+        if CursorExists(j%)=0 then
+            allCursorsOK% := 0;
+            break
+        endif
+    next
+    if not allCursorsOK% then
+        createCursors();
+    endif
+    analyzeRaw(resHdl%, rawHdl%, gPreRaw, gStimRaw, Erev);
+    analyzeDelta(resHdl%, deltaHdl%, gPreDelta, gStimDelta, rmp, Idc, pulseAmp, EPSPamp);
+    
+    placeResults(resHdl%,rawHdl%,1,2);
+    placeResults(resHdl%,deltaHdl%,2,2);
+    
+    printResults(resHdl%, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, Erev, gPreDelta, gStimDelta);
+end
+
+
+

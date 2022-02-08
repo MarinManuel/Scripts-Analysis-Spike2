@@ -1,0 +1,314 @@
+'#utils_extractDisynEPSP.s2s
+'#author: Marin MANUEL
+'#date: Apr 2017
+'#update July 2019
+'#
+'#This script substract the first EPSP in a train from all the EPSPs recorded
+'#during the train, potentially extracting a disynaptic EPSP
+'#update: added the possibility to change the timing of the EPSPs
+
+#include "includes/incl_utilFunctions.s2s"
+
+
+var resHdl%, timeHdl%;
+
+var ok%, i%;
+VmChan% := 1;
+StimChan% := 0;
+var stimMemChan% := 0;
+var timeFirstStim := 0;
+var stimPeriod := 4e-3;
+var nbStims% := 5;
+var doHandStim% := 0;
+
+var nbPrePoints% := 0;
+var nbPostPoints% := 0;
+var dummy, epspShifts[nbStims%];
+
+resHdl% := View();
+if ViewKind(resHdl%) <> 4 then
+    Message("Error! this script must be run on a RESULT view.");
+    halt;
+endif
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+'bring result window front and maximize
+view(resHdl%).FrontView(resHdl%);
+view(resHdl%).WindowVisible(3);
+
+DlgCreate("Set up parameters");
+DlgChan   (1, "Vm Channel", 0x1);
+DlgXValue (2, "Time of the first stimulation (s)");
+DlgReal   (3, "Period between stimulations (s)", 0, Inf, 0,0, 1e-3);
+DlgInteger(4, "Number of Stims in train", 0, Inf%, 0,0, 1);
+DlgCheck  (5, "Create stim markers by hand");
+DlgAllow(0, 0, chMainDlg%);
+ok% := DlgShow(VmChan%, timeFirstStim, stimPeriod, nbStims%, doHandStim%);
+if not ok% then halt; endif
+
+func chMainDlg%(item%)
+    DlgEnable(not DlgValue(5), 3, 4);
+    return 1;
+end
+
+
+'start by creating a TimeView window from the result view
+timeHdl% := res2smr%(resHdl%);
+if timeHdl% < 0 then
+    Message(Print$("Error while creating a new TimeView:\n%s", Error$(timeHdl%)));
+    halt;
+endif
+
+var resWinXLow, resWinXHigh, resWinYLow, resWinYHigh;
+view(resHdl%).WindowGetPos(resWinXLow, resWinYLow, resWinXHigh, resWinYHigh);
+view(timeHdl%).Window(resWinXLow, resWinYLow, resWinXHigh, resWinYHigh);
+FrontView(timeHdl%);
+WindowVisible(3); 'maximize
+
+'create an Event channel for the stim times
+stimMemChan% := MemChan(3);
+ChanTitle$(stimMemChan%, "Stim");
+DrawMode(stimMemChan%, 2, 0, 0, 2); 'Set Lines
+ChanColourSet(stimMemChan%, 1, 1, 0, 0);   'Set channel colour
+ChanShow(stimMemChan%);
+if stimMemChan% < 0 then
+    Message(Print$("Error while creating an Event channel:\n%s", Error$(StimChan%)));
+    halt;
+endif
+if not doHandStim% then
+    var stimTimes[nbStims%];
+    ArrConst(stimTimes[], stimPeriod);
+    stimTimes[0] := xToSMR(timeFirstStim, resHdl%);
+    ArrIntgl(stimTimes[]);
+    for i% := 0 to nbStims%-1 do
+        MemSetItem(stimMemChan%, 0, stimTimes[i%]);
+    next
+else
+    ok% := Interact(Print$("Create stim events in Channel %d. Press OK when done.", stimMemChan%),
+        0x0002+0x0004+0x0010+0x0020+0x0040+0x0080+0x0100,
+        0,
+        "&Cancel", "&OK");
+    docase
+    case ok% = 1 then 'Cancel
+        halt;
+    case ok% = 2 then 'OK
+        'continue
+    endcase
+endif
+
+StimChan% := ChanSave(stimMemChan%, 0);
+ChanDelete(stimMemChan%);
+ChanTitle$(StimChan%, "Stim");
+DrawMode(StimChan%, 2, 0, 0, 2); 'Set Lines
+ChanColourSet(StimChan%, 1, 1, 0, 0);   'Set channel colour
+ChanShow(StimChan%);
+
+'create channels
+var remArtMemChan%, offsetMemChan%, copyMemChan%, disynChan%;
+
+remArtMemChan% := MemChan(0,VmChan%);
+offsetMemChan% := MemChan(0,VmChan%);
+copyMemChan% := MemChan(0,VmChan%);
+placeChannels(VmChan%, remArtMemChan%, offsetMemChan%, copyMemChan%);
+
+
+'place cursors
+var epspDelay, baselineStart, baselineEnd, baseline;
+var epspDelayCur%;
+var baselineStartCur%, baselineEndCur%, baselineHCur%;
+var firstStimTime := xToSMR(timeFirstStim, resHdl%);
+
+HCursorDelete(-1);
+CursorDelete(-1);
+CursorVisible(0, 1);
+baselineStart := 0.0;
+baselineEnd := firstStimTime;
+baseline := ChanMeasure(VmChan%, 2, baselineStart, baselineEnd);
+epspDelay := 1e-3;
+
+baselineStartCur% := CursorNew(baselineStart, -1);
+baselineEndCur% := CursorNew(baselineEnd, -1);
+CursorLabel(4, baselineStartCur%, "baseline >");
+CursorLabel(4, baselineEndCur%, "< baseline");
+epspDelayCur% := CursorNew(baselineEnd+epspDelay, -1);
+CursorLabel(4, epspDelayCur%, "EPSP start");
+baselineHCur% := HCursorNew(VmChan%, baseline);
+
+'populate channels with initial values
+ChanCopy(VmChan%, remArtMemChan%, 0.0, MaxTime());
+copyEPSP(copyMemChan%, VmChan%, StimChan%, epspShifts);
+rescaleEPSP(offsetMemChan%, VmChan%, StimChan%, epspDelay, baseline);
+
+'create the resulting virtualchan
+const disynExpr$ := "Ch(%d)-Ch(%d)+%f";
+disynChan% := VirtualChan(0, Print$(disynExpr$,offsetMemChan%,copyMemChan%,baseline), VmChan%);
+if disynChan% < 0 then
+    Message(Print$("Error while creating a Virtual Channel:\n%s",Error$(disynChan%)));
+    halt;
+endif
+ChanShow(disynChan%);
+YRange(disynChan%, YLow(VmChan%), YHigh(VmChan%));
+ChanTitle$(disynChan%, "Substract");
+ChanUnits$(disynChan%, ChanUnits$(VmChan%));
+
+const baselineStartItem% := 1;
+const baselineEndItem% := 2;
+const epspDelayItem% := 3;
+const itemPrePoints% := 4;
+const itemPostPoints% := 5;
+const epspNumItem% := 6;
+const epspShiftItem% := 7;
+
+'create a dialog box to do the adjustments
+DlgCreate("Disynaptic extraction", 75, 10);
+
+DlgGroup("Artefacts removal", 0, 1, 50, 3);
+DlgInteger(itemPrePoints%,  "Number of  pre-trigger points to remove", 0, Inf%, 0, 2, 1);
+DlgInteger(itemPostPoints%, "Number of post-trigger points to remove", 0, Inf%, 0, 3, 1);
+
+DlgGroup("Baseline removal", 0, 5, 50, 4);
+DlgReal(baselineStartItem%, "Baseline Start (s)", 0.0, MaxTime(), 0, 6, 1e-4);
+DlgReal(baselineEndItem%, "Baseline End (s)", 0.0, MaxTime(), 0, 7, 1e-4);
+DlgReal(epspDelayItem%, "EPSP delay (s)", 0.0, Inf, 0, 8, 1e-4);
+
+DlgGroup("Adjust EPSP timing", 0, 9, 50, 3);
+DlgInteger(epspNumItem%, "EPSP number", 1, nbStims%, 0, 10, 1);
+DlgReal(epspShiftItem%, "EPSP shift (s)", -Inf, Inf, 0, 11, 1e-4);
+
+DlgAllow(1+4+16+32+64+256+4096, dlgIdleFunc%, dlgChangedFunc%);
+DlgButton(1, "Save", doSave%);
+DlgShow(baselineStart, baselineEnd, epspDelay, nbPrePoints%, nbPostPoints%, dummy, dummy);
+
+
+func dlgIdleFunc%()
+    if Cursor(baselineStartCur%)<>baselineStart then Cursor(baselineStartCur%, baselineStart); endif
+    if Cursor(baselineEndCur%)<>baselineEnd then Cursor(baselineEndCur%, baselineEnd); endif
+    if Cursor(epspDelayCur%)<>firstStimTime+epspDelay then Cursor(epspDelayCur%, firstStimTime+epspDelay); endif
+    if HCursor(baselineHCur%)<>baseline then HCursor(baselineHCur%, baseline, VmChan%); endif
+    return 1;
+end
+
+func dlgChangedFunc%(item%)
+    docase
+    case (item%=baselineStartItem% or item%=baselineEndItem%) then
+        baselineStart := DlgValue(baselineStartItem%);
+        baselineEnd := DlgValue(baselineEndItem%);
+        baseline := ChanMeasure(VmChan%, 2, baselineStart, baselineEnd);
+        rescaleEPSP(offsetMemChan%, VmChan%, StimChan%, epspDelay, baseline);
+        removeArt(offsetMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+        VirtualChan(disynChan%, Print$(disynExpr$,offsetMemChan%,copyMemChan%,baseline));
+    case (item%=epspDelayItem%) then
+        epspDelay := DlgValue(epspDelayItem%);
+        rescaleEPSP(offsetMemChan%, VmChan%, StimChan%, epspDelay, baseline);
+        removeArt(offsetMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+    case (item%=itemPrePoints% or item%=itemPostPoints%) then
+        ChanCopy(VmChan%, remArtMemChan%, 0.0, MaxTime());
+        removeArt(remArtMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+        removeArt(copyMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+        removeArt(offsetMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+    case item%=epspNumItem% then
+        DlgValue(epspShiftItem%, epspShifts[DlgValue(epspNumItem%)-1]);
+    case item%=epspShiftItem% then
+        epspShifts[DlgValue(epspNumItem%)-1] := DlgValue(epspShiftItem%);
+        MemDeleteItem(copyMemChan%, -1);
+        copyEPSP(copyMemChan%, VmChan%, StimChan%, epspShifts[]);
+        removeArt(copyMemChan%, StimChan%, DlgValue(itemPrePoints%), DlgValue(itemPostPoints%));
+    else
+    endcase;
+    return 1;
+end
+
+func doSave%();
+    var remArtChan%, offsetChan%, copyChan%;
+    var availChans%[4];
+    ChanList(availChans%[], 128); 'get 3 available channel numbers
+    remArtChan% := availChans%[1];
+    offsetChan% := availChans%[2];
+    copyChan% := availChans%[3];
+
+    MemSave(remArtMemChan%, remArtChan%);
+    MemSave(offsetMemChan%, offsetChan%);
+    MemSave(copyMemChan%, copyChan%);
+    
+    ChanHide(remArtMemChan%);
+    ChanHide(offsetMemChan%);
+    ChanHide(copyMemChan%);
+    placeChannels(VmChan%, remArtChan%, offsetChan%, copyChan%);
+    
+    VirtualChan(disynChan%, Print$(disynExpr$,offsetChan%,copyChan%,baseline));
+    return 0
+end
+
+proc removeArt(memChan%, evtChan%, nbPrePoints%, nbPostPoints%)
+    var curPos;
+    curPos := NextTime(evtChan%, -1.0);
+    while curPos>0 do
+        MemDeleteTime(memChan%, 3, curPos-nbPrePoints%*BinSize(memChan%), curPos+nbPostPoints%*BinSize(memChan%));
+        curPos := NextTime(evtChan%, curPos);
+    wend
+end
+
+proc copyEPSP(memChan%, sourceChan%, evtChan%, epspShifts[]);
+    'This function copies the first EPSP from sourceChan%
+    'after each marker in evtChan% and removes the offset so that the
+    'value at time evt+delay is equal to baseline
+    var curPos, nextPos;
+    curPos := NextTime(evtChan%, -1.0);
+    nextPos := NextTime(evtChan%, curPos);
+    var nbPoints% := (nextPos-curPos)/BinSize(sourceChan%);
+    var epspData[nbPoints%];
+    ChanData(sourceChan%, epspData[], curPos, nextPos);
+    var i% := 0;
+    while curPos>0 do
+        MemSetItem(memChan%, 0, curPos+epspShifts[i%], epspData[]);
+        curPos := NextTime(evtChan%, curPos);
+        i% += 1;
+    wend
+end
+
+proc rescaleEPSP(memChan%, sourceChan%, evtChan%, delay, baseline)
+    'this function copies sourceChan% to memChan%, then
+    'adjust the baseline so that each point at evt+delay is equal to baseline
+    var curPos, nbPoints%;
+    curPos := NextTime(evtChan%, -1.0);
+    while curPos>0 do
+        nbPoints% := (MaxTime(sourceChan%)-curPos)/BinSize(sourceChan%);
+        var epspData[nbPoints%];
+        var curBaseline;
+        ChanData(sourceChan%, epspData[], curPos, MaxTime(sourceChan%));
+        curBaseline := ChanValue(sourceChan%, curPos+delay);
+        ArrAdd(epspData[],baseline-curBaseline);
+        MemSetItem(memChan%, 0, curPos, epspData[]);
+        curPos := NextTime(evtChan%, curPos);
+    wend
+end
+
+
+proc placeChannels(sourceCh%, artCh%, baseCh%, copyCh%)
+    ChanShow(artCh%);
+    YRange(artCh%, YLow(sourceCh%), YHigh(sourceCh%));
+    ChanTitle$(artCh%, Print$("%s-art", Left$(ChanTitle$(sourceCh%), 9-4)));
+    ChanColourSet(artCh%, 1, 1, 0, 0);
+    ChanOrder(VmChan%, 0, artCh%);   'Move memChan on top of VmChan%
+    ChanOrder(artCh%, 0, sourceCh%);   'Move memChan on top of VmChan%
+    YAxisLock(artCh%, 1, 0);
+
+    ChanShow(baseCh%);
+    YRange(baseCh%, YLow(sourceCh%), YHigh(sourceCh%));
+    ChanTitle$(baseCh%, Print$("%s-base", Left$(ChanTitle$(sourceCh%), 9-5)));
+    ChanColourSet(baseCh%, 1, 0, 0, 1);
+    ChanOrder(sourceCh%, 0, baseCh%);   'Move VmChan% below offsetMemChan%
+    ChanOrder(artCh%, 0, baseCh%);
+    YAxisLock(baseCh%, 1, 0);
+
+    ChanShow(copyCh%);
+    YRange(copyCh%, YLow(sourceCh%), YHigh(sourceCh%));
+    ChanTitle$(copyCh%, Print$("%s+copy", Left$(ChanTitle$(sourceCh%), 9-5)));
+    ChanColourSet(copyCh%, 1, 1.0, 0.5, 0.0);
+    ChanOrder(copyCh%, 0, Print$("%d,%d,%d",baseCh%,artCh%,sourceCh%));
+    YAxisLock(copyCh%, 1, 0);
+end

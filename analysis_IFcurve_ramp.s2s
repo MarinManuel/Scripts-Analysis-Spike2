@@ -1,0 +1,97 @@
+'#### analysis_IFcurve_ramp.s2s
+'#### Marin Manuel
+'# this script performs an off-line analysis on a Current clamp ramp data
+
+#include "includes/incl_constants.s2s"
+#include "includes/incl_utilFunctions.s2s"
+#include "includes/incl_IFcurve.s2s"
+
+const LogFormat$:=" %-60s  |%s\n";
+
+var dataHdl%,ifHdl%;
+var currentFolder$;
+var dataFileName$;
+var name$,expNum%,cellNum%,fileNum%;
+
+VmChan%:=1;
+ImChan%:=2;
+var rampStart:=0,rampStop;
+
+var ok%;
+
+dataHdl%:=view();
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+FrontView(dataHdl%);
+
+if ViewKind(dataHdl%)=0 or ViewKind(dataHdl%)=4 then 'works on data file or memory views
+    'initialize variables
+    currentFolder$:=FileName$(1)+FileName$(2);
+    dataFileName$:=FileName$(3)+FileName$(4);
+    
+    rampStart := XLow();
+    rampStop:= XHigh();
+    
+    DlgCreate("IF curve parameters");
+    DlgChan(1,"Membrane Potential Channel", 0x1+0x10+0x200);
+    DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
+    DlgXValue(3,"Start analysis at");
+    DlgXValue(4,"  End analysis at");
+    ok%:=DlgShow(VmChan%,ImChan%,rampStart,rampStop);
+    if ok% then
+        'analysis
+        var resultHdl%;
+        var ascSlope,descSlope,globalSlope;
+        var fISI,lISI,Ion,Ioff;
+        var Vthr;
+        
+        freqChan%:=createFreqChan%(VmChan%,rampStart,rampStop);
+        DrawMode(freqChan%,7,4);
+        Optimise(freqChan%);
+        ChanShow(freqChan%);
+        resultHdl%:=doIFCurve%(freqChan%,ImChan%,rampStart,rampStop);
+        if resultHdl%>0 then
+            getIFCurveSlopeValues(resultHdl%,ascSlope,descSlope,globalSlope);
+            getIFCurveFreqValues(resultHdl%,fISI,lISI);
+            getIFCurveCurrentValues(resultHdl%,Ion,Ioff);
+            var dummy;
+            Vthr:=view(dataHdl%).getSpikeThreshold(VmChan%,view(dataHdl%).NextTime(freqChan%,rampStart),dummy);
+            
+            var tempCur1%,tempCur2%,tempCur3%;
+            tempCur1%:=view(dataHdl%).HCursorNew(ImChan%,Ion);
+            if tempCur1%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur1%,"Ion: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur1%,0.0);
+            endif
+            
+            tempCur2%:=view(dataHdl%).HCursorNew(ImChan%,Ioff);
+            if tempCur2%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur2%,"Ioff: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur2%,100.0); 
+            endif  
+            
+            tempCur3%:=view(dataHdl%).HCursorNew(VmChan%,Vthr);
+            if tempCur3%>0 then
+                view(dataHdl%).HCursorLabel(4,tempCur3%,"Vthr: %.1p");
+                view(dataHdl%).HCursorLabelPos(tempCur3%,0.0); 
+            endif
+            
+            placeResults(dataHdl%,resultHdl%,1,1);
+            
+            'save
+            FilePathSet(currentFolder$);
+            view(resultHdl%).FileSaveAs(dataFileName$+"_IFCurve.sxy",-1,0,"Choose name");
+            
+            PrintLog("%s %s - %s\n",Date$(2,2,3,3,"/"),Time$(1,1+2,3,":"),dataFileName$);
+            PrintLog("---------- -----   --------------------------------------------------------------\n");
+            PrintLog(LogFormat$,Print$("Ion=%+.1f Ioff=%+.1f deltaI=%+.1f deltaF=%+.1f",Ion,Ioff,Ioff-Ion,lISI-fISI),"");
+            PrintLog(LogFormat$,Print$("ascSlope=%+.1e descSlope=%+.1e Slope=%+.1e",ascSlope,descSlope,globalSlope),"");
+            PrintLog(LogFormat$,Print$("Threshold=%.1f",Vthr),"");
+            PrintLog("---------- -----   --------------------------------------------------------------\n");
+            PrintLog("%f\t%f\t%f\t%f\t%f\t%f\t%f\t%f\n",Ion,Ioff,Ioff-Ion,lISI-fISI,ascSlope,descSlope,globalSlope,Vthr);
+        endif
+    endif
+endif
+

@@ -1,0 +1,27 @@
+'utils_meanSDIFCurve.s2s
+'use this script on a XY view to clusterize data and extract mean +/- SD
+
+#include "includes/incl_IFcurve.s2s"
+
+var xyHdl%;
+xyHdl% := view();
+var chan%,limit,ok%;
+
+'hide the current script
+if view(App(3)).WindowVisible()>0 then 
+    view(App(3)).WindowVisible(0);
+endif
+
+if ViewKind(xyHdl%)<>12 then
+    Message("ERROR: this script is to be executed on a XY view");
+    halt
+endif
+
+DlgCreate("Parameters");
+DlgChan(1,"Channel",2048);
+DlgReal(2,"Cluster limit",0,Inf,0,0,0.1);
+ok% := DlgShow(chan%, limit);
+if ok% then
+    makeMeanIFCurve(xyHdl%, chan%, limit);
+endif
+
