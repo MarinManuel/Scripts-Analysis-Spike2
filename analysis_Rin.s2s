@@ -157,7 +157,7 @@ proc main()
         'loop through all the pulses
         var pulseStartTime;
         var pulseEndTime;
-        var measureResult%;
+        var isValid%;
         var dI, dVPeak, dVPlat;
         var marker%;
         var codes%[4];
@@ -166,8 +166,16 @@ proc main()
         while pulseStartTime>0 and pulseStartTime<endTime do
             pulseEndTime := NextTime(comOutChan%, pulseStartTime);
             
-            measureResult% := measurePulse%(VmChan%, ImChan%, pulseStartTime, pulseEndTime, doFilterSpikes%, dI, dVPeak, dVPlat);
-            if measureResult%>0 then
+            isValid% := measurePulse%(VmChan%, ImChan%, pulseStartTime, pulseEndTime, doFilterSpikes%, dI, dVPeak, dVPlat);
+            if doFilterSpikes% then
+                var startWin, endWin;
+                startWin := pulseStartTime-avgOffset;
+                endWin := startWin+avgLength;
+                if ChanSearch(VmChan%, 7, startWin, endWin)>0 then
+                    isValid%:=0;
+                endif
+            endif
+            if isValid%>0 then
                 'add data to IV curve
                 if ivHdl%>0 then
                     view(ivHdl%).XYAddData(peakXYChan%,dI,dVPeak);
