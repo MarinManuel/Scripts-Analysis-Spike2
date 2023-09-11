@@ -8,8 +8,8 @@ proc createCursors()
     CursorNew(XToBin(47e-3));
     CursorNew(XToBin(275e-3));
     CursorNew(XToBin(287e-3));
-    CursorNew(XToBin(325e-3));
-    CursorNew(XToBin(337e-3));
+    CursorNew(XToBin(370e-3));
+    CursorNew(XToBin(382e-3));
 end
 
 proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
@@ -153,8 +153,8 @@ end
 proc printResults(vh%, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, Erev, gPreDelta, gStimDelta)
     view(vh%);
     var nameOfFile$ := FileName$(3)+FileName$(4);
-    var output$ := Print$("%s\t%.1f\t%.1f\t%.1f\t%.2f\t%.0f\t%.0f\t%.0f\t%.1f\t%.0f\t%.0f\t%.0f\n",
-                    nameOfFile$, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, gStimRaw-gPreRaw, Erev, gPreDelta, gStimDelta, gStimDelta-gPreDelta);
+    var output$ := Print$("%s\t%.1f\t%.1f\t%.1f\t%.2f\t%.0f\t%.0f\t%.0f\t%.1f\n",
+                    nameOfFile$, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, gStimRaw-gPreRaw, Erev);
     
     PrintLog(output$);
     EditCopy(output$);
