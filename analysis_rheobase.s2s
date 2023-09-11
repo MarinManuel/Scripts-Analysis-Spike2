@@ -142,6 +142,7 @@ if ok% then
             PrintLog("file: %s - %s %s\n", view(dataHdl%).FileName$(3)+view(dataHdl%).FileName$(4)+view(dataHdl%).FileName$(5), Date$(), Time$());
             PrintLog("region : [%.2f - %.2f (s)]\n",startTime, endTime);
             PrintLog("Rheobase: %.2f (%s)\n",rheobase, view(dataHdl%).ChanUnits$(ImChan%));
+            PrintLog("%.2f\t%s\n",rheobase, view(dataHdl%).FileName$(3)+view(dataHdl%).FileName$(4)+view(dataHdl%).FileName$(5))
         endif
         
         
