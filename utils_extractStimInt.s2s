@@ -11,17 +11,19 @@
 '# the text markers have the format:
 '#       < ON,x0.1 ,2.2%,1,+,CV>
 '#<OFF,1><OFF,x0.01,77.3%,6,+,CV>
+'#1,2;1x1000.00Hz;10us,550mV,588mV;10us,-366mV,-572mV;
 
 #include "includes/incl_constants.s2s"
 
 var startTime, endTime;
-var ok%;
+var ok% := 0;
 var stimTime, markerTime;
 
 startTime := XLow();
 endTime := XHigh();
 
-var newMarkerChan%, newStimIntChan%;
+var newMarkerChan%, chanAStimIntChan%, chanBStimIntChan%;
+var oldStyle% := 1;
 
 DlgCreate("Parameters");
 DlgChan(1,"Notes Channel", 32);
@@ -36,22 +38,58 @@ if ok% then
     stimTime := startTime;
     markerTime := startTime;
     
-    newMarkerChan% := MemChan(8, 100); 'memory channel to hold the displaced notes
-    newStimIntChan% := MemChan(9,0,BinSize(1)); 'real wave memory channel to hold the stimulation intensity
+    'peak through the the notes to find if we have an old style or OctoPrint style notes
+    var i%;
+    for i%:=1 to 10 do
+        markerTime := NextTime(notesChan%, markerTime, stimCode%[], stimText$);
+        if markerTime>0 and markerTime<=endTime then
+            if extractStimInt(stimText$)>=0 then
+                oldStyle% := 1;
+                break
+            endif
+            var dummy[2];
+            if extractStimIntOctoStim(stimText$, dummy[])>0 then
+                oldStyle% := 0;
+                break
+            endif
+        endif
+    next
     
-    if newMarkerChan%<0 or newStimIntChan%<0 then
-        Message("ERROR: cannot create new memory channel:\n"+Error$(min(newMarkerChan%,newStimIntChan%)));
+    
+    newMarkerChan% := MemChan(8, 100); 'memory channel to hold the displaced notes
+    chanAStimIntChan% := MemChan(9,0,BinSize(1)); 'real wave memory channel to hold the stimulation intensity
+    if not oldStyle% then
+        chanBStimIntChan% := MemChan(9,0,BinSize(1));
+    endif
+    
+    if newMarkerChan%<0 or chanAStimIntChan%<0 then
+        Message("ERROR: cannot create new memory channel:\n"+Error$(min(newMarkerChan%,chanAStimIntChan%)));
         halt
     endif
     'display settings
     ChanShow(newMarkerChan%);
     ChanOrder(stimChan%,1);
     
-    ChanTitle$(newStimIntChan%,"Stim. Int.");
-    ChanUnits$(newStimIntChan%,"%");
-    ChanProcessAdd(newStimIntChan%, 10, 100000, 0.0);
-    YRange(newStimIntChan%, 0.0, 100.0);
-    ChanShow(newStimIntChan%);
+    if oldStyle% then
+        ChanTitle$(chanAStimIntChan%,"Stim. Int.");
+        ChanUnits$(chanAStimIntChan%,"%");
+        ChanProcessAdd(chanAStimIntChan%, 10, 100000, 0.0);
+        YRange(chanAStimIntChan%, 0.0, 100.0);
+        ChanShow(chanAStimIntChan%);
+    else
+        ChanTitle$(chanAStimIntChan%,"Int. ChanA");
+        ChanUnits$(chanAStimIntChan%,"mV");
+        ChanProcessAdd(chanAStimIntChan%, 10, 100000, 0.0);
+        YRange(chanAStimIntChan%, 0.0, 100.0);
+        ChanShow(chanAStimIntChan%);
+        
+        ChanTitle$(chanBStimIntChan%,"Int. ChanB");
+        ChanUnits$(chanBStimIntChan%,"mV");
+        ChanProcessAdd(chanBStimIntChan%, 10, 100000, 0.0);
+        YRange(chanBStimIntChan%, 0.0, 100.0);
+        ChanShow(chanBStimIntChan%);
+    endif
+    
     
     
     'find the next event containing a stim
@@ -65,7 +103,14 @@ if ok% then
         'create a new marker at the time of the stimulation
         MemSetItem(newMarkerChan%, 0, stimTime, stimCode%[], stimText$);
         'set the intensity of the stim in the real wave channel
-        MemSetItem(newStimIntChan%, 0, stimTime, extractStimInt(stimText$));
+        if oldStyle% then
+            MemSetItem(chanAStimIntChan%, 0, stimTime, extractStimInt(stimText$));
+        else
+            var ints[2];
+            extractStimIntOctoStim(stimText$, ints[]);
+            MemSetItem(chanAStimIntChan%, 0, stimTime, ints[0]);
+            MemSetItem(chanBStimIntChan%, 0, stimTime, ints[1]);
+        endif        
         
         'find the next event containing a stim
         stimTime := NextTime(stimChan%, stimTime);
@@ -75,19 +120,24 @@ if ok% then
         'Cursor(2, markerTime); 'DEBUG
     wend 
     
-    
+    if not oldStyle% then
+        Optimise(chanAStimIntChan%);
+        Optimise(chanBStimIntChan%);
+    endif
     
     
 endif
+
 
 
 func NextStimMarker(chan%, time, &code%[], &stimText$)
     var found% := -1;
     var result := -1;
     var dummy%[4], text$;
+    var dummy[2];
     repeat
         time := NextTime(chan%, time, dummy%[], text$);
-        if time>0 and Left$(text$, 1)="<" and Right$(text$, 1)=">" then
+        if extractStimInt(text$)>=0 or extractStimIntOctoStim(text$, dummy[])>=0 then
             result := time;
             stimText$ := text$;
             ArrConst(code%[], dummy%[]);
@@ -139,3 +189,24 @@ func extractStimInt(stimText$)
     return -1;
 end
 
+
+func extractStimIntOctoStim(stimText$, stimInts[])
+    var nFields%;
+    ReadSetup("","","","",";");
+    var channelsStr$,freqStr$,stagesStr$[100];
+    nFields% := ReadStr(stimText$, channelsStr$, freqStr$, stagesStr$[]);
+    ReadSetup();
+    
+    'Input string has wrong format
+    if nFields%<3 then
+        return -1;
+    endif
+    
+    var chanA%, chanB%;
+    ReadStr(channelsStr$, chanA%, chanB%);
+    var stageDur,intA,intB;
+    ReadStr(stagesStr$[0], stageDur, intA, intB);
+    stimInts[0] := chanA%>0 ? intA : 0.0;
+    stimInts[1] := chanB%>0 ? intB : 0.0;
+    return 1;
+end
