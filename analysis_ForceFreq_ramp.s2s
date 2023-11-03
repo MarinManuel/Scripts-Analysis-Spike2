@@ -48,10 +48,13 @@ if ViewKind(dataHdl%)=0 or ViewKind(dataHdl%)=4 then 'works on data file or memo
         var Vthr,Vr;
         
         'try to measure the RMP
-        'we don't have any info on the beginning of the ramp, so we're looking for the label in the Notes
-        'we're betting that the beginning is out of the window if we've zoomed in around the spikes
-        'if we haven't soomed in, either we find a tag before, or no tag at all.
-        var beginRamp := LastTime(30, XLow());
+        'The begining of the ramp is indicated by an event in ViewTrig1. Most of the time, it would be contained in between rampStart and rampStop
+        'but if we're zoomed in on the spikes, instead of the whole ramp, it could be offscreen.
+        var beginRamp := NextTime(trig1Chan%, rampStart);
+        if beginRamp<0 or beginRamp>rampStop then
+            ' could not find the marker in the current view, try off screen on the left
+            beginRamp := LastTime(trig1Chan%, rampStart);
+        endif
         if beginRamp<0 then 'not tag found
             beginRamp := VrPeriod;
         endif

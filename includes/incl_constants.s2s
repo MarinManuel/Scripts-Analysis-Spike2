@@ -35,18 +35,18 @@ var     ext$[13];
 var   VmChan%           := 1;
 var   ImChan%           := 2;
 var   drpChan%          := 3;
-var   forceChan%        := 4;
-var   emgChan%          := 5;
+var   forceChan%        := 10;
+var   emgChan%          := 11;
 var   VmACChan%         := 10;
 var   StimIntChan%      := 11;
 
 var   keyChan%          := 31;
 var   notesChan%        := 30;
-var   trig1Chan%        := 801;
-var   trig2Chan%        := 802;
-var   comOutChan%       := 803;
-var   stepActChan%      := 804;
-var   StimChan%         := 805;
+var   trig1Chan%        := 6001;
+var   trig2Chan%        := 6002;
+var   comOutChan%       := 6003;
+var   stepActChan%      := 26;
+var   StimChan%         := 6005;
 
 
 

@@ -51,7 +51,6 @@ var pulseArr[100][5]; 'this 2D array holds:
 var startTime, endTime; 'start and stop time of processing
 startTime := XLow();
 endTime := XHigh();
-comOutChan% := 803; 'default to ComOut
 var avgLength, avgOffset; 'parameters for the averaging
 avgLength := 0.7;
 avgOffset := 0.1;
@@ -113,6 +112,17 @@ proc main()
     currentTolerance, doForceZeroIntercept%);
     if ok% then
         theFileName$ := FileName$(3)+FileName$(4);
+        
+        var nEvents% := ChanMeasure(comOutChan%, 4, startTime, endTime);
+        if nEvents% mod 2 <> 0 then
+            ok% := Query("ComOut channel contains an odd number of events, are you sure you want to continue?");
+            if not ok% then
+                halt;
+            endif
+        endif
+        
+        
+        
         
         var pulseChan%;
         if ChanKind(comOutChan%)<>4 then
@@ -229,6 +239,11 @@ proc main()
             prettifyGinIVCurve(ivHdl%, ChanUnits$(ImChan%), ChanTitle$(ImChan%), ChanUnits$(VmChan%));
             
             var N% := view(ivHdl%).XYCount(1);
+            if N%<=0 then
+                Message("Error: no pulses found to average");
+                halt;
+            endif
+            
             var Xpeak[N%],Ypeak[N%],Xplat[N%],Yplat[N%];
             view(ivHdl%).XYGetData(peakXYChan%, Xpeak[], Ypeak[]);
             view(ivHdl%).XYGetData(platXYChan%, Xplat[], Yplat[]);

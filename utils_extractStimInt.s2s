@@ -93,10 +93,10 @@ if ok% then
     
     
     'find the next event containing a stim
-    stimTime := NextTime(stimChan%, stimTime);
+    stimTime := NextTime(stimChan%, startTime);
     'Cursor(1, stimTime);
     'find the next event containing a stim marker
-    markerTime := NextStimMarker(notesChan%, markerTime, stimCode%[], stimText$);
+    markerTime := NextStimMarker(notesChan%, startTime, stimCode%[], stimText$);
     'Cursor(2, stimTime);
     
     while (stimTime>0 and stimTime<endTime) and (markerTime>0 and markerTime<endTime) do

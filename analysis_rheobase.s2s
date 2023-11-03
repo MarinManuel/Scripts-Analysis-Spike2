@@ -66,6 +66,13 @@ if ok% then
         comOutChan% := pulseChan%;
     endif
     
+    var nEvt% := ChanMeasure(comOutChan%, 4, startTime, endTime);
+    if nEvt% mod 2 <> 0 then
+        Message("ERROR: Channel %d contains an odd number of events. \n adjust the range of the analysis and try again", comOutChan%);
+        halt;
+    endif
+    
+    
     pulseEnd := startTime;
     pulseStart := NextTime(comOutChan%, pulseEnd, gateDir);
     while pulseStart>=0 and pulseStart<endTime do

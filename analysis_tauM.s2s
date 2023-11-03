@@ -62,7 +62,7 @@ if ViewKind(dataHdl%)<>0 then
 endif
 startPos := XLow();
 endPos := XHigh();
-comOutChan% := 802; 'default to Trig2
+var pulseStartEvtChan% := trig2Chan%; 'default to Trig2
 
 Vr := ChanMeasure(VmChan%,2,startPos, endPos);
 theFileName$ := FileName$(3)+FileName$(4);
@@ -74,13 +74,13 @@ DlgChan(2,"Injected Current Channel", 0x1+0x10+0x200);
 DlgChan(3,"Pulse start event Channel", 0x2+0x4+0x8+0x20);
 DlgXValue(4, "Start analysis at");
 DlgXValue(5, "  End analysis at");
-ok% := DlgShow(VmChan%, ImChan%, comOutChan%, startPos, endPos);
+ok% := DlgShow(VmChan%, ImChan%, pulseStartEvtChan%, startPos, endPos);
 if ok% then
-    if ChanKind(comOutChan%)=4 then
+    if ChanKind(pulseStartEvtChan%)=4 then
         'if we have a lvl chan as a marker channel, transform it in into
         'a Evt+ channel marking the low-high transitions
-        comOutChan% := lvl2Evt%(comOutChan%, lowHighTransition%, startPos, endPos);
-        if comOutChan%<=0 then
+        pulseStartEvtChan% := lvl2Evt%(pulseStartEvtChan%, lowHighTransition%, startPos, endPos);
+        if pulseStartEvtChan%<=0 then
             Message("Error when creating Event channel");
             halt
         else
@@ -96,7 +96,7 @@ if ok% then
     endif
     
     
-    srfHdl%:=SetAverage(Print$("%d,%d",VmChan%,ImChan%),avgWidth/binSz,avgOffset,comOutChan%,1+4,3);
+    srfHdl%:=SetAverage(Print$("%d,%d",VmChan%,ImChan%),avgWidth/binSz,avgOffset,pulseStartEvtChan%,1+4,3);
     if srfHdl%>0 then
         view(srfHdl%).Process(startPos, endPos, 1, 1);
         view(srfHdl%).DrawMode(-1,2,1,0);
@@ -217,7 +217,7 @@ if ok% then
         view(dataHdl%).ChanProcessClear(ImChan%, ChanProcessInfo(ImChan%));
     endif
     if memChanCreated% then
-        view(dataHdl%).ChanDelete(comOutChan%,0);
+        view(dataHdl%).ChanDelete(pulseStartEvtChan%,0);
     endif
 endif
 

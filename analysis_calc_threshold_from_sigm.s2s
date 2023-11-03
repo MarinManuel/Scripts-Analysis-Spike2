@@ -1,0 +1,30 @@
+'analysis_calc_threshold_from_sigm.s2s
+' this scripts calculate the threshold value from a sigmoid fit (for instance to calculate the Ia threshold from a curve showing the grp I volley amplitude as a function of the stimulus intensity)
+
+const THRESHOLD_PCT := 5; ' threshold is defined as the value where the sigmoid crossed 10% of the baseline
+
+var winHdl% := view();
+const chan% := 1;
+if ChanFit(chan%, -1) = 0 or ChanFit(chan%, -2) <> 5 then
+    Message("ERROR: no sigmoid fit on Chan %d. Aborting", chan%);
+    halt;
+endif
+
+var ref := ChanFit(chan%, -8);
+var A := ChanFitCoef(chan%, 0);
+var B := ChanFitCoef(chan%, 1);
+var C := ChanFitCoef(chan%, 2) + ref;
+var D := ChanFitCoef(chan%, 3);
+
+
+var Y := A + (THRESHOLD_PCT/100)*(B-A);
+var x := C - D * ln(((B - A) / (Y - A)) - 1);  'based on the equation for the sigmoid fit
+
+HCursorDelete(-1);
+CursorDelete(-1);
+HCursorNew(chan%, A);
+HCursorNew(chan%, B);
+HCursorNew(chan%, Y);
+CursorNew(x);
+
+PrintLog("%.0f\t%s\n", x, FileName$(3)+FileName$(4)+FileName$(5));
