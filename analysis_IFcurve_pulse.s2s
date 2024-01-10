@@ -21,6 +21,7 @@ var doForceFreqCurve% := 0;
 var doForceCurrentCurve% := 0;
 var doMeanIFCurve% := 0;
 
+const currentMeasureWindow := 0.1; 's
 const nbSlices% := 4;
 const tolerance := 0.05; '5%
 const DEFAULTVIEWMARGINS := 0.10; 'view will be pulse +/- DEFAULTVIEWMARGINS
@@ -57,7 +58,7 @@ if ViewKind(dataHdl%)=0 then 'works on data file
     DlgLabel(10,"");
     DlgCheck(11,"Plot stationary frequency");
     DlgInteger(12,"Time period from end of pulse (%)",0,100,0,0,5);
-    DlgInteger(13,"Plot ISI n°",1,100,0,0,1);
+    DlgInteger(13,"Plot ISI nÂ°",1,100,0,0,1);
     DlgCheck(14,"Plot Force-Freq curve");
     DlgCheck(15,"Plot Force-Current curve");
     DlgChan(16,"Force channel",1+512+2048);
@@ -107,7 +108,7 @@ if ViewKind(dataHdl%)=0 then 'works on data file
                 CursorActive(tempCur%,16,0,Print$("Cursor(0)-%f",pulseDuration*(statFreqPercent%/100.0)));
                 ifHdl%:=MeasureToXY(14,pulseChan%,0);
                 if ifHdl%>0 then
-                    MeasureX(101,ImChan%,Print$("Cursor(0)-%f",pulseDuration/2.0),Print$("Cursor(0)+%f",pulseDuration/2.0),pulseDuration);
+                    MeasureX(101,ImChan%,Print$("Cursor(0)-%f",currentMeasureWindow),Print$("Cursor(0)+%f",currentMeasureWindow),currentMeasureWindow);
                     MeasureY(2,freqChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
                     MeasureChan(1,Print$("avg %s",view(dataHdl%).ChanTitle$(freqChan%)),0);
                 endif
@@ -126,7 +127,7 @@ if ViewKind(dataHdl%)=0 then 'works on data file
                 if doForceCurrentCurve% then
                     forceCurrentHdl%:=MeasureToXY(14,pulseChan%,0);
                     if forceCurrentHdl%>0 then
-                        MeasureX(101,ImChan%,Print$("Cursor(0)-%f",pulseDuration/2.0),Print$("Cursor(0)+%f",pulseDuration/2.0),pulseDuration);
+                        MeasureX(101,ImChan%,Print$("Cursor(0)-%f",currentMeasureWindow),Print$("Cursor(0)+%f",currentMeasureWindow),currentMeasureWindow);
                         MeasureY(2,forceChan%,Print$("Cursor(%d)",tempCur%),Print$("Cursor(0)"));
                         MeasureChan(1,Print$("avg %s",view(dataHdl%).ChanTitle$(forceChan%)),0);
                     endif
