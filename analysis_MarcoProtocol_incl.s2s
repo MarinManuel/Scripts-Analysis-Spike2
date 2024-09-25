@@ -10,7 +10,7 @@ proc createCursors()
     CursorNew(XToBin(287e-3));
     CursorNew(XToBin(370e-3));
     CursorNew(XToBin(382e-3));
-end
+    end
 
 proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
     view(dataHdl%);
@@ -23,9 +23,12 @@ proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
     var iVals[nChans%], vpreVals[nChans%], vstimVals[nChans%];
     var i%;
     for i% := 1 to nChans% do
-        vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
-        vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
-        iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        'vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        'vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
+        'iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        vpreVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(3):Cursor(4)-Cursor(3)]);
+        vstimVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(7):Cursor(8)-Cursor(7)]);
+        iVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%+nChans%]).[Cursor(3):Cursor(4)-Cursor(3)]);
     next
     xyHdl% := FileNew(12,0);
     XYSetChan(0); 'create new channel
@@ -33,7 +36,7 @@ proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
     XYSetChan(-1, nChans%, 0, 0);
     XYAddData(1, vpreVals[], iVals[]);
     XYAddData(2, vstimVals[], iVals[]);
-
+    
     var coefPre[2], coefStim[2], yrev;
     FitPoly(coefPre[], iVals[], vpreVals[]);
     FitPoly(coefStim[], iVals[], vstimVals[]);
@@ -71,7 +74,7 @@ proc analyzeRaw(dataHdl%, &xyHdl%, &gPreRaw, &gStimRaw, &Erev)
     ChanFit(2, 0);
     ChanFit(2, 2, 1);
     ChanFit(2, 1+2, "XLow()", "XHigh()", "XLow()");
-end
+    end
 
 proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulseAmp, &EPSPamp)
     view(dataHdl%);
@@ -85,12 +88,18 @@ proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulse
     var deltaIVals[nChans%], deltaVpreVals[nChans%], deltaVstimVals[nChans%];
     var i%;
     for i% := 1 to nChans% do
-        vpreBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
-        vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
-        vstimBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(5)),BinToX(Cursor(6)));
-        vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
-        iBaseVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
-        iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        '        vpreBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
+        '        vpreVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        '        vstimBaseVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(5)),BinToX(Cursor(6)));
+        '        vstimVals[i%-1] := ChanMeasure(chans%[i%], 2, BinToX(Cursor(7)),BinToX(Cursor(8)));
+        '        iBaseVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(1)),BinToX(Cursor(2)));
+        '        iVals[i%-1] := ChanMeasure(chans%[i%+nChans%], 2, BinToX(Cursor(3)),BinToX(Cursor(4)));
+        vpreBaseVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(1):Cursor(2)-Cursor(1)]);
+        vpreVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(3):Cursor(4)-Cursor(3)]);
+        vstimBaseVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(5):Cursor(6)-Cursor(5)]);
+        vstimVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%]).[Cursor(7):Cursor(8)-Cursor(7)]);
+        iBaseVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%+nChans%]).[Cursor(1):Cursor(2)-Cursor(1)]);
+        iVals[i%-1] := ArrMedian(View(dataHdl%,chans%[i%+nChans%]).[Cursor(3):Cursor(4)-Cursor(3)]);
     next
     ArrConst(deltaIVals[], iVals[]);
     ArrSub(deltaIVals[], iBaseVals[]);
@@ -104,7 +113,7 @@ proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulse
     XYSetChan(-1, nChans%, 0, 0);
     XYAddData(1, deltaVpreVals[], deltaIVals[]);
     XYAddData(2, deltaVstimVals[], deltaIVals[]);
-
+    
     var coefPre[2], coefStim[2];
     FitPoly(coefPre[], deltaIVals[], deltaVpreVals[]);
     FitPoly(coefStim[], deltaIVals[], deltaVstimVals[]);
@@ -128,7 +137,7 @@ proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulse
     XYKey(2,0);
     XYKey(3,1);
     XYOptimise(-1);
-        
+    
     ChanFit(1, 0);
     ChanFit(1, 2, 1);
     ChanFit(1, 1+2, "XLow()", "XHigh()", "XLow()");
@@ -148,17 +157,17 @@ proc analyzeDelta(dataHdl%, &xyHdl%, &gPreDelta, &gStimDelta, &rmp, &Idc, &pulse
         vZeroChan% := chans%[zeroIdx%+1];
         EPSPamp := view(dataHdl%).ChanMeasure(vZeroChan%, 2, BinToX(Cursor(7)),BinToX(Cursor(8))) - view(dataHdl%).ChanMeasure(vZeroChan%, 2, BinToX(Cursor(1)),BinToX(Cursor(4)));
     endif
-end
+    end
 
 proc printResults(vh%, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, Erev, gPreDelta, gStimDelta)
     view(vh%);
     var nameOfFile$ := FileName$(3)+FileName$(4);
     var output$ := Print$("%s\t%.1f\t%.1f\t%.1f\t%.2f\t%.0f\t%.0f\t%.0f\t%.1f\n",
-                    nameOfFile$, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, gStimRaw-gPreRaw, Erev);
+    nameOfFile$, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, gStimRaw-gPreRaw, Erev);
     
     PrintLog(output$);
     EditCopy(output$);
-end
+    end
 
 
 proc analyzeRecInh(resHdl%)
@@ -183,7 +192,7 @@ proc analyzeRecInh(resHdl%)
     placeResults(resHdl%,deltaHdl%,2,2);
     
     printResults(resHdl%, rmp, Idc, pulseAmp, EPSPamp, gPreRaw, gStimRaw, Erev, gPreDelta, gStimDelta);
-end
+    end
 
 
 
