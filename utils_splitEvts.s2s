@@ -1,0 +1,43 @@
+' utils_splitEvts.s2s
+' Marin Manuel - June 2025
+' This script is used to generate a split an event channel into a series of evt channels where similar events are stored together 
+
+var evtChan%;
+var nGroups% := 4;
+var startT:=0,endT:=MaxTime();
+var i%;
+var pos := -1;
+var ok%;
+
+if ViewKind()<>0 then
+    Message("ERROR: must be run on a Time view");
+    halt
+endif
+
+
+DlgCreate("split events");
+DlgChan(1, "Source Channel", 0x2+0x4+0x8+0x10+0x20+0x40); 'all kinds of events
+DlgInteger(2, "Number of groups to split across", 0, 100, 0,0, 1);
+DlgXValue(3, "Start time");
+DlgXValue(4, "End time");
+ok% := DlgShow(evtChan%, nGroups%, startT, endT);
+if not ok% then
+    halt;
+endif
+
+var resEvtChans%[nGroups%];
+for i% := 0 to nGroups%-1 do
+    resEvtChans%[i%] := MemChan(3); 'create an Evt+ channel
+    ChanTitle$(resEvtChans%[i%], Print$("%s_Grp%d",ChanTitle$(evtChan%),i%+1));
+    ChanShow(resEvtChans%[i%]);
+next
+
+pos := startT;
+pos := NextTime(evtChan%, pos);
+i% := 0;
+while pos > 0 and pos < endT do
+    MemSetItem(resEvtChans%[i%], 0, pos);
+    i% := (i% + 1) mod nGroups%;
+    pos := NextTime(evtChan%, pos);
+wend
+
