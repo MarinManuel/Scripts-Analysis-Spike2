@@ -1,0 +1,54 @@
+#include "analysis_MarcoProtocol_incl.s2s"
+#include "includes/incl_fileUtils.s2s"
+
+const WORKING_COPY_PATH$ := "Y:\\media\\manuel\\LOCAL COPY\\";
+
+var fields$[20];
+var res_filename$, res_fullpath$, parent_folder$;
+var folder_date$;
+var vh%;
+var csv_file$ := join_path$(WORKING_COPY_PATH$, "Project Diazepam\\Marco Files to process.csv");
+var csv_hdl% := FileOpen(csv_file$, 8);
+
+if csv_hdl%<=0 then
+    Message("Error opening file: ", Error$(csv_hdl%));
+    halt
+endif
+
+var exp_date$, cell$, index$, data_filename$;
+var vHdl%;
+var pos;
+var region1$, region2$;
+
+ReadSetup(",", "", "", "", ",");
+while (Read(fields$[]) >= 0) do
+    res_filename$ := fields$[0]+".srf";
+    folder_date$ := get_date_folder_from_filename$(res_filename$, join_path$(WORKING_COPY_PATH$, "recordings_rigD\\"));
+    if len(folder_date$)=0 then
+        continue
+    endif
+    
+    'trim file name
+    ReadSetup("_","", "", "", "_");
+    ReadStr(res_filename$, exp_date$, cell$, index$);
+    data_filename$ := Print$("%s_%s_%s.smrx", exp_date$, cell$, index$);
+    region1$ := "-";
+    region2$ := "-";
+    'PrintLog(res_filename$, " -> ", join_path$(folder_date$, data_filename$));
+    if FileStatus(join_path$(folder_date$, data_filename$))>0 then
+        vHdl% := FileOpen(join_path$(folder_date$, data_filename$), 0, 2);
+        if CursorExists(1) and CursorExists(2) then
+            pos := ChanSearch(1, 7, Cursor(1), Cursor(2));
+            region1$ := Print$("%.1f", pos);
+        endif
+        if CursorExists(3) and CursorExists(4) then
+            pos := ChanSearch(1, 7, Cursor(3), Cursor(4));
+            region2$ := Print$("%.1f", pos);
+        endif
+        view(vHdl%); FileClose();
+    endif
+    PrintLog("%s\t%s\t%s\n", data_filename$, region1$, region2$);
+    view(csv_hdl%);
+    ReadSetup(",", "", "", "", ",");
+wend;
+FileClose();

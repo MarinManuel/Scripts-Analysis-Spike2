@@ -1,0 +1,91 @@
+#include "analysis_MarcoProtocol_incl.s2s"
+
+const WORKING_COPY_PATH$ := "Y:\\media\\manuel\\LOCAL COPY\\";
+
+
+
+var fields$[20];
+var res_filename$, res_fullpath$;
+var folder_date$;
+var vh%;
+
+func join_path$(stem$, leaf$)
+    if Right$(stem$, 1)="\\" then
+        return stem$+leaf$
+    else
+        return stem$+"\\"+leaf$
+    endif
+end
+
+
+
+func get_folder_from_filename$(name$, root_folder$:="")
+    var folder$ := root_folder$;
+    var pos% := InStr(name$, "_");
+    if pos%=0 then
+        return ""
+    endif
+    folder$ += Left$(name$, 4) + "-" + Mid$(name$, 5, 2) + "-" + Mid$(name$, 7, 2);
+    return folder$
+end
+
+func find_file_in_folder$(name$, root_folder$)
+    var hits$[1000];
+    var n_hits%;
+    'try current directory
+    FilePathSet(root_folder$, 0);
+    n_hits% := FileList(hits$[], -1, name$);
+    if n_hits%>0 then
+        return hits$[0];
+    else
+        'try in sub-directories
+        n_hits% := FileList(hits$[], -2);
+        var i%, out$;
+        for i% := 0 to n_hits%-1 do
+            root_folder$ := join_path$(root_folder$,hits$[i%]);
+            out$ := find_file_in_folder$(name$, root_folder$);
+            if len(out$)>0 then
+                return join_path$(root_folder$, out$)
+            endif        
+        next
+    endif
+    return ""
+end
+
+proc close_all_XY()
+    var hdls%[100];
+    var i%;
+    ViewList(hdls%[], 4096);
+    for i% := 1 to hdls%[0] do
+        view(hdls%[i%]); FileClose(0, -1);
+    next
+end
+
+
+
+var csv_file$ := join_path$(WORKING_COPY_PATH$, "Project Diazepam\\Marco Files to process.csv");
+var csv_hdl% := FileOpen(csv_file$, 8);
+if csv_hdl%<=0 then
+    Message("Error opening file: ", Error$(csv_hdl%));
+    halt
+endif
+
+
+
+ReadSetup(",", "", "", "", ",");
+while (Read(fields$[]) >= 0) do
+    res_filename$ := fields$[0]+".srf";
+    folder_date$ := get_folder_from_filename$(res_filename$, join_path$(WORKING_COPY_PATH$, "recordings_rigD\\"));
+    if len(folder_date$)>0 then
+        res_fullpath$ := find_file_in_folder$(res_filename$, folder_date$);
+        if len(res_fullpath$)>0 and FileStatus(res_fullpath$)>0 then
+            vh% := FileOpen(res_fullpath$, 4, 2);
+            CursorDelete(-1);
+            analyzeRecInh(vh%);
+            view(vh%); FileClose();
+            close_all_XY();
+        endif
+        view(csv_hdl%);
+    endif
+wend;
+FileClose();

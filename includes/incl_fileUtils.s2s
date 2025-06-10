@@ -1,0 +1,54 @@
+func join_path$(stem$, leaf$)
+    if Right$(stem$, 1)="\\" then
+        return stem$+leaf$
+    else
+        return stem$+"\\"+leaf$
+    endif
+end
+
+func get_date_folder_from_filename$(name$, root_folder$:="")
+    var folder$ := root_folder$;
+    var pos% := InStr(name$, "_");
+    if pos%=0 then
+        return ""
+    endif
+    folder$ += Left$(name$, 4) + "-" + Mid$(name$, 5, 2) + "-" + Mid$(name$, 7, 2);
+    return folder$
+end
+
+func find_file_in_folder$(name$, root_folder$)
+    var hits$[1000];
+    var n_hits%;
+    var current_dir$ := FilePath$(0);
+    'try current directory
+    FilePathSet(root_folder$, 0);
+    n_hits% := FileList(hits$[], -1, name$);
+    FilePathSet(current_dir$);
+    if n_hits%>0 then
+        return hits$[0];
+    else
+        'try in sub-directories
+        FilePathSet(root_folder$, 0);
+        n_hits% := FileList(hits$[], -2);
+        FilePathSet(current_dir$);
+        var i%, out$;
+        for i% := 0 to n_hits%-1 do
+            root_folder$ := join_path$(root_folder$,hits$[i%]);
+            out$ := find_file_in_folder$(name$, root_folder$);
+            if len(out$)>0 then
+                return join_path$(root_folder$, out$)
+            endif        
+        next
+    endif
+    return ""
+end
+
+func get_parent_folder$(name$)
+    var this_dir$ := FileName$(-1, name$);
+    var current_dir$ := FilePath$(0);
+    var parent$;
+    FilePathSet(this_dir$, 0);
+    FileList(parent$, -3);
+    FilePathSet(current_dir$, 0);
+    return parent$;
+end
