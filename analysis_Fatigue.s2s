@@ -13,7 +13,6 @@ var timeWindow := 25e-3; 's
 var ok%;
 
 
-
 'hide the current script
 if view(App(3)).WindowVisible()>0 then 
     view(App(3)).WindowVisible(0);
@@ -28,8 +27,8 @@ endif
 
 startPos := XLow();
 endPos := XHigh();
-trig1Chan% := 29;
-trig2Chan% := 28;
+trig1Chan% := 6001;
+trig2Chan% := 6002;
 
 
 '# Dialog box
