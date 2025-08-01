@@ -156,6 +156,7 @@ if ok% then
         view(dataHdl%).Window(0,0,50,100);
         view(resultHdl%).WindowVisible(1);
         view(resultHdl%).Window(50,0,100,100);
+        FrontView(resultHdl%);
         view(dataHdl%);
     endif    
 endif
