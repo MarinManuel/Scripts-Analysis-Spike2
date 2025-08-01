@@ -61,6 +61,10 @@ tw1Time := ChanSearch(forceChan%,1,startTrainTime,secPulseTime);
 tw1Force := ChanValue(forceChan%,tw1Time);
 
 
+var nEvents% := Count(trig2Chan%, startTime, endTime);
+var trainDur := lastEventTime - startTrainTime;
+var meanFreq := (nEvents%-1) / trainDur;
+
 
 'cursors
 var baselineCursor%, maxForceCursor%, platForceCursor%;
@@ -75,9 +79,9 @@ twIdxCursor% := CursorNew(lastTwTime); CursorLabel(4, twIdxCursor%,"Idx Tw");
 
 'print log
 PrintLog("Sag Analysis of %s [%f : %f]\n",FileName$(3)+FileName$(4)+FileName$(5),startTime,endTime);
-PrintLog("Sag\tIndex\n");
+PrintLog("Freq\tSag\tIndex\n");
 PrintLog("-------------------------------------------------\n");
-PrintLog("%g\t%g\n",plateauForce/maxForce,plateauForce/tw1Force);
+PrintLog("%.0f\t%g\t%g\n",meanFreq,plateauForce/maxForce,plateauForce/tw1Force);
 
 
 
