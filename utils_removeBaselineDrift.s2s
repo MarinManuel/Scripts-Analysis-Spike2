@@ -9,7 +9,7 @@ const MAXNBCHANS% := 400;
 var chan%;
 chan% := forceChan%;
 var preTrigTime := 0.01; 's
-var postTrigTime := 0.50; 's
+var postTrigTime := 0.60; 's
 var newOffset;
 var startTime, endTime;
 var ok%;
@@ -52,7 +52,10 @@ if ok% then
     
     'create temp channels
     for i% := 1 to chans%[0] do
-        memChans%[i%] := MemChan(0,chans%[i%]); 'create a memchan copy of chans%[i%]
+        memChans%[i%] := MemChan(9, 0, BinSize(chans%[i%])); ' RealWave
+        ChanTitle$(memChans%[i%], ChanTitle$(chans%[i%])+"+0");
+        ChanUnits$(memChans%[i%], ChanUnits$(chans%[i%]));
+        ChanComment$(memChans%[i%], ChanComment$(chans%[i%])+Print$("CH(%d) after offset removal",chans%[i%]));
     next
     
     curPos := NextTime(trig1Chan%, startTime);
